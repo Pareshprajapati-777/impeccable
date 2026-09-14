@@ -29,6 +29,21 @@ fn material(png: &[u8], format: &str) -> Result<Value, String> {
         json!({"format":format,"width":image.width,"height":image.height,"alpha":if image.data.chunks_exact(4).any(|p|p[3]<255){"transparent"}else{"opaque"}}),
     )
 }
+// Region capture must not resize Chromium's surface: clipped CDP captures can
+// change edge antialiasing between frames. Verify the unmodified viewport first,
+// then take an integer crop from those exact pixels, without resizing.
+fn crop_viewport(png: &[u8], width: u32, height: u32, clip: [f64; 4]) -> Result<Vec<u8>, String> {
+    let image = impeccable_comp::png_io::decode_png(png)?.image;
+    if image.width != width as usize || image.height != height as usize {
+        return Err("component capture does not match the requested viewport".into());
+    }
+    let [x, y, w, h] = clip.map(f64::round);
+    if ![x,y,w,h].iter().all(|v| v.is_finite()) || x < 0. || y < 0. || w < 1. || h < 1.
+        || x + w > width as f64 || y + h > height as f64 {
+        return Err("component box must contain real pixels inside the viewport".into());
+    }
+    impeccable_comp::png_io::encode_png(&impeccable_comp::raster::crop(&image, x, y, w, h), &[])
+}
 fn render_page(
     browser: &mut Browser,
     snapshot: Arc<HtmlSnapshot>,
@@ -63,7 +78,7 @@ fn render_page(
             coords[3] * height as f64,
         ];
         let first = page
-            .screenshot_clip(clip[0], clip[1], clip[2], clip[3])
+            .screenshot_viewport()
             .map_err(|e| e.message)?;
         let urls = page.observed_response_urls().map_err(|e| e.message)?;
         let evidence = page.response_evidence(&urls).map_err(|e| e.message)?;
@@ -108,12 +123,12 @@ fn render_page(
             return Err("component document response is unverified".into());
         }
         let second = page
-            .screenshot_clip(clip[0], clip[1], clip[2], clip[3])
+            .screenshot_viewport()
             .map_err(|e| e.message)?;
         let after = page.response_evidence(&urls).map_err(|e| e.message)?;
         if first != second || after.revision != evidence.revision || after.changed_during_collection
         {
-            return Err("component changed during capture".into());
+            return Err(format!("component changed during capture (pixels: {}, network revision: {} -> {}, response mutation: {})", first != second, evidence.revision, after.revision, after.changed_during_collection));
         }
         // Identity comes from the isolated document, never a producer-written receipt.
         let unchanged = page
@@ -122,10 +137,11 @@ fn render_page(
         if unchanged != dom["html"] {
             return Err("component document changed during capture".into());
         }
-        let png = base64::engine::general_purpose::STANDARD
+        let viewport_png = base64::engine::general_purpose::STANDARD
             .decode(first)
             .map_err(|e| e.to_string())?;
-        let proof = json!({"kind":"static-code","entry":snapshot.entry(),"inputSnapshot":snapshot.digest(),"inputs":snapshot.manifest(),"observedDependencies":responses,"domSha256":hash(dom["html"].as_str().unwrap().as_bytes()),"screenshotSha256":hash(&png),"viewport":{"width":width,"height":height,"dpr":1},"box":box_,"reducedMotion":true,"svgElements":dom["svg"],"rasterElements":dom["images"],"semanticControls":dom["controls"]});
+        let png = crop_viewport(&viewport_png, width, height, clip)?;
+        let proof = json!({"kind":"static-code","entry":snapshot.entry(),"inputSnapshot":snapshot.digest(),"inputs":snapshot.manifest(),"observedDependencies":responses,"domSha256":hash(dom["html"].as_str().unwrap().as_bytes()),"screenshotSha256":hash(&png),"viewportScreenshotSha256":hash(&viewport_png),"cropMethod":"verified-viewport-pixels","viewport":{"width":width,"height":height,"dpr":1},"box":box_,"reducedMotion":true,"svgElements":dom["svg"],"rasterElements":dom["images"],"semanticControls":dom["controls"]});
         Ok((png, proof))
     })();
     page.close();
@@ -228,5 +244,22 @@ impl ComponentCapturer for NativeComponentCapturer {
         })();
         browser.close();
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn component_crops_copy_verified_pixels_without_resizing_or_synthetic_edges() {
+        let image = impeccable_comp::raster::Image {width:3,height:2,data:(0u8..24).collect()};
+        let png = impeccable_comp::png_io::encode_png(&image, &[]).unwrap();
+        let crop = crop_viewport(&png,3,2,[1.,0.,2.,2.]).unwrap();
+        let pixels = impeccable_comp::png_io::decode_png(&crop).unwrap().image;
+        assert_eq!((pixels.width,pixels.height),(2,2));
+        assert_eq!(pixels.data,[&image.data[4..12],&image.data[16..24]].concat());
+        assert!(crop_viewport(&png,3,2,[0.,0.,0.2,1.]).is_err());
+        assert!(crop_viewport(&png,3,2,[2.,0.,2.,1.]).is_err());
+        assert!(crop_viewport(&png,4,2,[0.,0.,1.,1.]).is_err());
     }
 }
