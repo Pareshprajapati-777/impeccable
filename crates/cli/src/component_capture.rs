@@ -37,12 +37,22 @@ fn crop_viewport(png: &[u8], width: u32, height: u32, clip: [f64; 4]) -> Result<
     if image.width != width as usize || image.height != height as usize {
         return Err("component capture does not match the requested viewport".into());
     }
-    let [x, y, w, h] = clip.map(f64::round);
-    if ![x,y,w,h].iter().all(|v| v.is_finite()) || x < 0. || y < 0. || w < 1. || h < 1.
-        || x + w > width as f64 || y + h > height as f64 {
+    let [x, y, w, h] = clip;
+    // The manifest allows a 1e-5 normalized edge tolerance. Validate the
+    // continuous box before clipping; do not rescue genuinely outside regions.
+    if !clip.iter().all(|v| v.is_finite()) || x < 0. || y < 0. || w <= 0. || h <= 0.
+        || x + w > width as f64 * 1.00001 || y + h > height as f64 * 1.00001 {
         return Err("component box must contain real pixels inside the viewport".into());
     }
-    impeccable_comp::png_io::encode_png(&impeccable_comp::raster::crop(&image, x, y, w, h), &[])
+    // Round endpoints together: round(x) + round(w) can exceed an odd-sized
+    // viewport even when x + w is exactly its edge.
+    let rect = impeccable_comp::raster::clamp_rect(&image, x, y, w, h);
+    if rect.w == 0 || rect.h == 0 {
+        return Err("component box must contain real pixels inside the viewport".into());
+    }
+    impeccable_comp::png_io::encode_png(&impeccable_comp::raster::crop(
+        &image, rect.x as f64, rect.y as f64, rect.w as f64, rect.h as f64,
+    ), &[])
 }
 fn render_page(
     browser: &mut Browser,
@@ -250,6 +260,18 @@ impl ComponentCapturer for NativeComponentCapturer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn component_edge_crops_round_endpoints_on_odd_viewports() {
+        let image = impeccable_comp::raster::Image {width:3,height:3,data:(0u8..36).collect()};
+        let png = impeccable_comp::png_io::encode_png(&image, &[]).unwrap();
+        let crop = crop_viewport(&png,3,3,[1.5,1.5,1.5,1.5]).unwrap();
+        let pixels = impeccable_comp::png_io::decode_png(&crop).unwrap().image;
+        assert_eq!((pixels.width,pixels.height),(1,1));
+        assert_eq!(pixels.data,image.data[32..36]);
+        // Match the manifest's tolerance for normalized floating-point edges.
+        let crop = crop_viewport(&png,3,3,[1.5,1.5,1.500001,1.500001]).unwrap();
+        assert_eq!(impeccable_comp::png_io::decode_png(&crop).unwrap().image.data,pixels.data);
+    }
     #[test]
     fn component_crops_copy_verified_pixels_without_resizing_or_synthetic_edges() {
         let image = impeccable_comp::raster::Image {width:3,height:2,data:(0u8..24).collect()};
