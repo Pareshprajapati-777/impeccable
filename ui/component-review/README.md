@@ -12,7 +12,7 @@ The dashboard route `/dashboard/component-review/` is a temporary review checkpo
 
 ## Native runtime
 
-Build the shared UI with `bun run build:component-review`, then rebuild the engine. It embeds the JS and licensed fonts; the runtime needs no Node server or dashboard. The bundled asset is tracked alongside the native consumer, and the bundle test catches source drift.
+Use the Bun version in `.bun-version` (also used by CI). Build the shared UI with `bun run build:component-review`, then rebuild the engine. It embeds the JS and licensed fonts; the runtime needs no Node server or dashboard. The bundled asset is tracked alongside the native consumer, and the bundle test catches source drift.
 
 From a project, run `impeccable component-review prepare --manifest review.json`. The manifest uses the UI packet shape plus `schemaVersion: 1`; replace each preview/comp/context/thumbnail `url` with a project-relative `path`, and declare each component's `dependencies` (CSS, images, fonts and other inputs used by its rendered preview). The service assigns revisions and round numbers. Paths outside the project are refused. Prepare prints a session ID. Start `impeccable component-review serve --session <id>` and open the returned loopback URL. `status --session <id>` reads the saved result. The default store is `~/.impeccable/component-reviews`; a test may use `--store <outside-project-directory>`.
 
