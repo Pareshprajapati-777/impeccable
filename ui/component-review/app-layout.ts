@@ -35,13 +35,13 @@ export const appLayout = `
 .mobile-panes{position:relative;z-index:7;box-shadow:0 3px 6px #202b2510}
 /* Utility actions share a compact icon language; decisions retain explicit labels. */
 .utility-icon{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
-.review .icon-button{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:36px;height:36px;min-height:36px;padding:7px;text-decoration:none;border:1px solid transparent;border-radius:4px;background:transparent;color:var(--muted)}
-.review .icon-button:hover{background:#e5ebe4;border-color:#b9c8bd;color:var(--teal)}
-.review .icon-button[aria-pressed=true]{background:#e5eee8;color:var(--teal)}
-.review .icon-button:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+:is(.review,.comparison-panel) .icon-button{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:36px;height:36px;min-height:36px;padding:7px;text-decoration:none;border:1px solid transparent;border-radius:4px;background:transparent;color:var(--muted)}
+:is(.review,.comparison-panel) .icon-button:hover{background:#e5ebe4;border-color:#b9c8bd;color:var(--teal)}
+:is(.review,.comparison-panel) .icon-button[aria-pressed=true]{background:#e5eee8;color:var(--teal)}
+:is(.review,.comparison-panel) .icon-button:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
 .review .label-icon{display:inline-flex;align-items:center;justify-content:center;gap:7px}
 .review .tray-actions .utility-icon{width:18px;height:18px;stroke-width:1.6}
-.material{align-items:center;margin-bottom:10px}.material .source-link{margin-left:auto;width:30px;height:30px;min-height:30px;padding:5px}
+.material{align-items:center;margin-bottom:10px}
 .preview-round{justify-content:flex-end;margin-bottom:10px}
 .compare-toolbar{margin-bottom:10px}
 .view-controls{min-height:0}.view-controls>.background-options{margin-left:auto;gap:2px}.view-controls .swatch-button{display:flex;align-items:center;justify-content:center;min-width:32px;height:32px;padding:5px}
