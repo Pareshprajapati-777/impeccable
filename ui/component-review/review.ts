@@ -1,5 +1,5 @@
 import { componentPresentation, nextUnreviewed, approveRemaining, componentState, repairStatus, newDraft, submission, summarize, type Box, type Decision, type Draft, type ReviewPacket, type ReviewHistory } from './model';
-import { comparisonSize } from './viewport';
+import { comparisonSize, hoverPan } from './viewport';
 import { styles } from './styles';
 import { icon } from './icons';
 
@@ -28,6 +28,7 @@ export function mountComponentReview(host: HTMLElement, packet: ReviewPacket, op
   let lastDecision: {id: string; name: string; action: 'approve' | 'revise'; previous?: Decision} | null = null;
   const shortcutLabel = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘Enter' : 'Ctrl+Enter';
   let overlay = false;
+  let expandedComparison = false;
   let showAll = false;
   let trayOpen = true;
   let restoreTrayAfterFeedback = false;
@@ -102,6 +103,7 @@ export function mountComponentReview(host: HTMLElement, packet: ReviewPacket, op
     renderedMobilePane=mobilePane;
     const inspectorTop=keepInspector?(root.querySelector('.inspection-content')?.scrollTop??0):0;
     const filesOpen=keepInspector&&(root.querySelector<HTMLDetailsElement>('.changed-files')?.open??false);
+    const oldComparisonHeight=root.querySelector<HTMLElement>('.comparison-slot')?.clientHeight ?? 200;
     const oldPane=root.querySelector<HTMLElement>('.pan-viewport');
     const retainPan=renderedSelection===selected&&renderedZoom===zoom;
     const panLeft=retainPan?(oldPane?.scrollLeft??0):0, panTop=retainPan?(oldPane?.scrollTop??0):0;
@@ -171,13 +173,13 @@ export function mountComponentReview(host: HTMLElement, packet: ReviewPacket, op
             ${repair?.change?.kind==='changed'?`<details class="changed-files" ${filesOpen?'open':''}><summary>${repair.change.files.length?`${repair.change.files.length} changed ${repair.change.files.length===1?'file':'files'}`:repair.change.reasons.includes('region')?'Region changed':priorComponent?.note!==c.note?'Description changed · files unchanged':'Component definition changed · files unchanged'}</summary>${repair.change.files.length?`<ul>${repair.change.files.map(path=>`<li>${esc(path)}</li>`).join('')}</ul>`:''}${priorComponent&&priorComponent.note!==c.note?`<dl class="description-diff"><dt>Previous description</dt><dd>${esc(priorComponent.note)}</dd><dt>Current description</dt><dd>${esc(c.note)}</dd></dl>`:''}</details>`:''}
           </div>`:''}
           ${priorComponent?`<div class="preview-round"><div class="round-switch" role="group" aria-label="Preview version"><button id="current-round" aria-pressed="${!viewingPrevious}">Current · round ${packet.round}</button><button id="previous-round" aria-pressed="${viewingPrevious}">Previous · round ${history!.packet.round}</button></div></div>`:''}
-          <div class="compare-toolbar"><label title="Comparison zoom · based on comp pixels">${icon('zoom')}<select id="zoom" aria-label="Comparison zoom">${[['fit','Fit'],['1','100%'],['2','200%'],['4','400%']].map(([value,label])=>`<option value="${value}" ${String(zoom)===value?'selected':''}>${label}</option>`).join('')}</select></label><button id="overlay" class="overlay-control" aria-pressed="${overlay}"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="10" height="10"/><rect x="7" y="7" width="10" height="10"/></svg>Overlay comp</button></div>
+          <div class="comparison-slot"><div class="comparison-panel"><h2 class="expanded-title">${esc(v!.name)}</h2><div class="compare-toolbar"><label title="Comparison zoom · based on comp pixels">${icon('zoom')}<select id="zoom" aria-label="Comparison zoom">${[['fit','Fit'],['1','100%'],['2','200%'],['4','400%']].map(([value,label])=>`<option value="${value}" ${String(zoom)===value?'selected':''}>${label}</option>`).join('')}</select></label><button id="overlay" class="overlay-control" aria-pressed="${overlay}"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="10" height="10"/><rect x="7" y="7" width="10" height="10"/></svg>Overlay comp</button><button id="expand-comparison" class="icon-button" aria-label="${expandedComparison?'Restore comparison':'Enlarge comparison'}" title="${expandedComparison?'Restore comparison (Esc)':'Enlarge comparison'}" aria-expanded="${expandedComparison}">${icon(expandedComparison?'compact':'expand')}</button></div>
           <div class="compare">
             <figure><figcaption>${viewingPrevious ? `Comp · Round ${history!.packet.round}` : 'In the comp'}</figcaption><div class="pan-viewport" aria-label="Reference comparison canvas" tabindex="0"><div class="crop-stage"><img class="crop-image" src="${url(vp.comp.url)}" alt="Reference region for ${esc(v!.name)}" style="width:${100/v!.box.w}%;left:${-100*v!.box.x/v!.box.w}%;top:${-100*v!.box.y/v!.box.h}%"></div></div></figure>
             <figure><figcaption>${viewingPrevious ? `Previous · Round ${history!.packet.round}` : history ? `Current · Round ${packet.round}` : useContext ? 'In the page' : presentation!.caption}</figcaption><div class="pan-viewport" aria-label="Produced comparison canvas" tabindex="0"><div class="output crop-stage ${isRaster&&!useContext&&!useFrame&&backdrop==='checker'?'checker':''}">${!useFrame ? `<img class="asset" src="${url(sourceUrl!)}" alt="Produced ${esc(v!.name)}" style="object-position:${esc(v!.preview.position ?? 'center')}">` : `<iframe aria-hidden="true" title="Rendered ${esc(v!.name)}" src="${url(sourceUrl!)}" sandbox="" tabindex="-1" width="${vp.comp.width}" height="${vp.comp.height}"></iframe>`}${overlay ? `<img class="crop-image overlay-image" src="${url(vp.comp.url)}" alt="Reference overlay" style="width:${100/v!.box.w}%;left:${-100*v!.box.x/v!.box.w}%;top:${-100*v!.box.y/v!.box.h}%">` : ''}</div></div></figure>
           </div>
           ${isRaster ? `<div class="view-controls">${v!.context ? `<div role="group" aria-label="Asset view"><button id="isolated" aria-pressed="${!useContext}">Asset only</button><button id="context" aria-pressed="${useContext}">In page</button></div>` : ''}<div class="background-options" role="group" aria-label="Asset preview background"><button id="background-checker" class="swatch-button" aria-label="Checkerboard background" title="Checkerboard background" aria-pressed="${backdrop==='checker'}" ${useContext?'disabled':''}><span class="background-swatch checker"></span></button><button id="background-page" class="swatch-button" aria-label="${vp.comp.background?'Page color':'Neutral'} background" title="${vp.comp.background?'Page color':'Neutral'} background" aria-pressed="${backdrop==='page'}" ${useContext?'disabled':''}><span class="background-swatch page-swatch"></span></button></div></div>` : ''}
-          <div class="component-details"><p class="layering">${esc(v?.context?.layering ?? 'Layer placement not recorded.')}</p>
+          </div></div><div class="component-details"><p class="layering">${esc(v?.context?.layering ?? 'Layer placement not recorded.')}</p>
           <p class="component-note">${esc(v!.note)}</p>
           </div></div><div class="review-form">${notice}${viewingPrevious?'<p class="previous-notice">Viewing the previous round. Return to Current to make a decision.</p>':''}<div class="decisions" role="group" aria-label="Decision for ${esc(c.name)}"><div class="decision-title"><strong>Your review <span>Round ${packet.round}</span></strong>${viewingPrevious?'<p>Return to Current to review this round.</p>':''}</div><button id="approve" class="decision-approve ${d?.action === 'approve' ? 'approved' : ''}" aria-pressed="${d?.action === 'approve'}">Looks good</button><button id="revise" class="decision-revise ${d?.action === 'revise' ? 'revise' : ''}" aria-pressed="${d?.action === 'revise'}">Needs work</button>${d ? `<button id="clear" class="quiet icon-button" aria-label="Clear decision" title="Clear decision">${icon('undo')}</button>` : ''}</div>
           ${edit ? `<form id="feedback-form"><div class="feedback-fields"><label class="feedback">What needs to change?<textarea id="feedback" aria-describedby="feedback-hint">${esc(edit.feedback)}</textarea></label><p id="feedback-hint" class="feedback-hint">Optional — leave blank for the agent to diagnose.</p><label class="check"><input id="split" type="checkbox" ${edit.split ? 'checked' : ''}> Split into separately reviewable components</label></div><div class="feedback-actions"><button id="cancel-feedback" type="button" class="quiet">Cancel</button><button id="save-feedback" type="submit" class="primary">${isLast?'Save & finish review':'Save & next'} <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15m-6-6 6 6-6 6"/></svg></button><span class="shortcut-hint">${shortcutLabel}</span></div></form>` : d?.action==='revise' ? `<p class="saved-feedback">${esc(d.feedback || 'No note — agent will diagnose.')}</p>` : ''}
@@ -187,7 +189,14 @@ export function mountComponentReview(host: HTMLElement, packet: ReviewPacket, op
       <section class="inventory-section ${trayOpen?'':'tray-collapsed'} ${showAll&&trayOpen?'tray-expanded':''}" aria-label="Component inventory"><div class="section-head"><h2>Components</h2><div class="inventory-filters" role="group" aria-label="Filter components"><button data-filter="attention" aria-pressed="${inventoryFilter==='attention'}">Needs attention <b>${attentionCount}</b></button><button data-filter="approved" aria-pressed="${inventoryFilter==='approved'}">Approved <b>${stats.approved}</b></button><button data-filter="all" aria-pressed="${inventoryFilter==='all'}">All <b>${packet.components.length+draft.missing.length}</b></button></div><div class="tray-actions"><button id="show-all" class="icon-button" aria-pressed="${showAll}" aria-controls="component-tray" aria-label="${showAll?'Compact':'Expand'} tray" title="${showAll?'Compact':'Expand'} tray">${icon(showAll?'compact':'expand')}</button><button id="toggle-tray" class="icon-button" aria-expanded="${trayOpen}" aria-controls="component-tray" aria-label="${trayOpen?'Hide':'Show'} component tray" title="${trayOpen?'Hide':'Show'} component tray">${icon(trayOpen?'hideTray':'showTray')}</button></div></div>
       <div id="component-tray" class="inventory ${showAll ? 'all' : ''}">${shownComponents.map(item=>{const i=packet.components.indexOf(item);const state=stateFor(item); return `<button class="item ${state.kind} ${selected === item.id ? 'active' : ''}" data-select="${esc(item.id)}" aria-pressed="${selected === item.id}">${item.thumbnail ? `<span class="item-thumb">${item.thumbnail.box ? `<span class="thumb-crop" style="width:min(100%,${76*item.thumbnail.box.w*packet.comp.width/(item.thumbnail.box.h*packet.comp.height)}px);aspect-ratio:${item.thumbnail.box.w*packet.comp.width}/${item.thumbnail.box.h*packet.comp.height}"><img alt="" loading="lazy" src="${url(item.thumbnail.url)}" style="position:absolute;width:${100/item.thumbnail.box.w}%;max-width:none;left:${-100*item.thumbnail.box.x/item.thumbnail.box.w}%;top:${-100*item.thumbnail.box.y/item.thumbnail.box.h}%;"></span>` : `<img alt="" loading="lazy" src="${url(item.thumbnail.url)}">`}</span>` : ''}<span class="item-number">${state.kind==='approved'?checkIcon:state.kind==='feedback'?feedbackIcon:''}${i+1}<span class="item-medium">${icon(componentPresentation(item).code ? 'code' : 'image')}${esc(componentPresentation(item).label)}</span></span><strong>${esc(item.name)}</strong><span class="state ${state.kind}">${esc(state.label)}</span></button>`}).join('')}${(inventoryFilter==='approved'?[]:draft.missing).map((m,i)=>`<button class="item feedback ${selected===m.id?'active':''}" data-select="${esc(m.id)}"><span class="item-number">${packet.components.length+i+1}</span><strong>${esc(m.name)}</strong><span class="state revise">Missing</span></button>`).join('')}${!shownComponents.length&&(inventoryFilter==='approved'||!draft.missing.length)?`<p class="inventory-empty">${inventoryFilter==='attention'?'Every component is approved. Confirm the map is complete, then continue.':'No components approved yet.'}</p>`:''}</div></section>
       <footer><div><button id="approve-rest" ${!stats.pending || uncommitted ? 'disabled' : ''}>Approve ${stats.approved || stats.revisions ? 'remaining' : 'all'}</button><label class="check"><input id="inventory-confirm" type="checkbox" ${draft.inventoryConfirmed?'checked':''}> Nothing missing from the comp</label></div><div class="submit-area"><p role="status">${esc(statusMessage)}</p><button id="submit" class="primary" ${!stats.canSubmit || uncommitted || sending || submitted?'disabled':''}>${sending?'Sending…':stats.hasFeedback?'Send feedback':'Approve & continue'}</button></div></footer>
-    </section>`;
+    </section><dialog id="comparison-dialog" aria-label="Enlarged component comparison"></dialog>`;
+    const comparisonDialog=root.querySelector<HTMLDialogElement>('#comparison-dialog')!;
+    const comparisonPanel=root.querySelector<HTMLElement>('.comparison-panel');
+    const comparisonSlot=root.querySelector<HTMLElement>('.comparison-slot');
+    if(expandedComparison && comparisonPanel && comparisonSlot){
+      comparisonSlot.style.height=`${oldComparisonHeight}px`;
+      comparisonDialog.append(comparisonPanel);comparisonDialog.showModal();
+    }
     if(viewingPrevious)root.querySelectorAll<HTMLButtonElement|HTMLInputElement|HTMLTextAreaElement>('.decisions button,#feedback,#split,#save-feedback,#cancel-feedback,#undo-decision,#approve-rest,#submit,#inventory-confirm').forEach(el=>el.disabled=true);
     root.querySelector('.inspection-content')!.scrollTop=inspectorTop;
     if(submitted||sending)root.querySelectorAll<HTMLButtonElement|HTMLInputElement|HTMLTextAreaElement>('.decisions button,#save-feedback,#cancel-feedback,#undo-decision,#approve-rest,#mark,#inventory-confirm,#missing-name,#missing-feedback,#feedback,#split,#remove-missing,[data-coordinate]').forEach(el=>el.disabled=true);
@@ -271,16 +280,67 @@ export function mountComponentReview(host: HTMLElement, packet: ReviewPacket, op
       }
       const content=root.querySelector<HTMLElement>('.inspection-content');
       const panes=Array.from(root.querySelectorAll<HTMLElement>('.pan-viewport'));
-      if(content?.clientHeight)panes.forEach(p=>p.style.height=`${Math.min(248,Math.max(100,content.clientHeight-40))}px`);
+      if(content?.clientHeight){
+        const height=expandedComparison
+          ? Math.max(100,comparisonDialog.clientHeight-(comparisonPanel?.querySelector('.compare-toolbar')?.clientHeight??0)-(comparisonPanel?.querySelector('.expanded-title')?.clientHeight??0)-(comparisonPanel?.querySelector('.view-controls')?.clientHeight??0)-112)
+          : Math.min(248,Math.max(100,content.clientHeight-40));
+        panes.forEach(p=>p.style.height=`${height}px`);
+      }
       if(v&&panes.length){const size=comparisonSize(v.box.w*vp.comp.width,v.box.h*vp.comp.height,Math.min(...panes.map(p=>p.clientWidth)),Math.min(...panes.map(p=>p.clientHeight)),zoom);root.querySelectorAll<HTMLElement>('.crop-stage').forEach(el=>{el.style.width=`${size.width}px`;el.style.height=`${size.height}px`;});}
+      panes.forEach(p=>{const pannable=p.scrollWidth>p.clientWidth+1||p.scrollHeight>p.clientHeight+1;p.classList.toggle('pannable',pannable);p.title=pannable?'Move your pointer to pan. You can also scroll, swipe, or use arrow keys.':'';});
       if(stage&&frame&&v){const s=stage.clientWidth/(v.box.w*vp.comp.width);frame.style.transform=`scale(${s})`;frame.style.left=`${-v.box.x*vp.comp.width*s}px`;frame.style.top=`${-v.box.y*vp.comp.height*s}px`;}
       const bounds=workbench.getBoundingClientRect();const region=root.querySelector<HTMLElement>('.region');const end=root.querySelector<HTMLElement>('.number');
       const path=root.querySelector<SVGPathElement>('.connector path');
       if(region&&end&&path){const a=region.getBoundingClientRect(),b=end.getBoundingClientRect();const x1=a.right-bounds.left,y1=a.top+a.height/2-bounds.top,x2=b.left-bounds.left-8,y2=b.top+b.height/2-bounds.top;path.setAttribute('d',`M ${x1} ${y1} H ${x2-14} V ${y2} H ${x2}`);}
     }
-    resize=new ResizeObserver(()=>{resizePreview();updateScrollEdges();});resize.observe(workbench);const content=root.querySelector('.inspection-content');if(content)resize.observe(content);resizePreview();
+    function setComparisonExpanded(open: boolean) {
+      if(!comparisonPanel||!comparisonSlot||open===expandedComparison)return;
+      const button=root.querySelector<HTMLButtonElement>('#expand-comparison')!;
+      const before=(expandedComparison?comparisonDialog:comparisonPanel).getBoundingClientRect();
+      const reduced=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const currentPane=comparisonPanel.querySelector<HTMLElement>('.pan-viewport');
+      const px=currentPane ? currentPane.scrollLeft/Math.max(1,currentPane.scrollWidth-currentPane.clientWidth) : 0;
+      const py=currentPane ? currentPane.scrollTop/Math.max(1,currentPane.scrollHeight-currentPane.clientHeight) : 0;
+      const restorePan=()=>comparisonPanel.querySelectorAll<HTMLElement>('.pan-viewport').forEach(p=>{p.scrollLeft=px*Math.max(0,p.scrollWidth-p.clientWidth);p.scrollTop=py*Math.max(0,p.scrollHeight-p.clientHeight);});
+      const restore=()=>{
+        comparisonSlot.append(comparisonPanel);comparisonDialog.close();comparisonSlot.style.height='';
+        expandedComparison=false;button.innerHTML=icon('expand');button.setAttribute('aria-label','Enlarge comparison');button.title='Enlarge comparison';button.setAttribute('aria-expanded','false');
+        resizePreview();restorePan();button.focus({preventScroll:true});
+      };
+      if(open){
+        comparisonSlot.style.height=`${before.height}px`;comparisonDialog.append(comparisonPanel);comparisonDialog.showModal();expandedComparison=true;
+        button.innerHTML=icon('compact');button.setAttribute('aria-label','Restore comparison');button.title='Restore comparison (Esc)';button.setAttribute('aria-expanded','true');
+        resizePreview();restorePan();button.focus({preventScroll:true});
+        const after=comparisonDialog.getBoundingClientRect();
+        if(!reduced)comparisonDialog.animate([{transform:`translate(${before.x-after.x}px,${before.y-after.y}px) scale(${before.width/after.width},${before.height/after.height})`,opacity:.6},{transform:'none',opacity:1}],{duration:240,easing:'cubic-bezier(.2,.8,.2,1)'});
+      }else{
+        if(button.disabled)return;
+        const target=comparisonSlot.getBoundingClientRect();
+        if(reduced){restore();return;}
+        button.disabled=true;
+        const animation=comparisonDialog.animate([{transform:'none',opacity:1},{transform:`translate(${target.x-before.x}px,${target.y-before.y}px) scale(${target.width/before.width},${target.height/before.height})`,opacity:.6}],{duration:200,easing:'cubic-bezier(.4,0,.2,1)',fill:'forwards'});
+        animation.finished.then(()=>{if(comparisonDialog.isConnected){animation.cancel();button.disabled=false;restore();}}).catch(()=>{});
+      }
+    }
+    on('expand-comparison',()=>setComparisonExpanded(!expandedComparison));
+    comparisonDialog.addEventListener('cancel',e=>{e.preventDefault();e.stopPropagation();setComparisonExpanded(false);});
+    comparisonDialog.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();setComparisonExpanded(false);}});
+    resize=new ResizeObserver(()=>{resizePreview();updateScrollEdges();});resize.observe(workbench);resize.observe(comparisonDialog);const content=root.querySelector('.inspection-content');if(content)resize.observe(content);resizePreview();
     const panes=Array.from(root.querySelectorAll<HTMLElement>('.pan-viewport'));
     panes.forEach(pane=>{pane.scrollLeft=panLeft;pane.scrollTop=panTop;});
+    panes.forEach(pane=>{
+      pane.querySelectorAll('img').forEach(img=>img.draggable=false);
+      pane.addEventListener('pointermove',e=>{
+        if(e.pointerType!=='mouse'||e.buttons||!pane.classList.contains('pannable'))return;
+        const rect=pane.getBoundingClientRect();
+        pane.scrollLeft=hoverPan(e.clientX,rect.left,pane.clientWidth,pane.scrollWidth);
+        pane.scrollTop=hoverPan(e.clientY,rect.top,pane.clientHeight,pane.scrollHeight);
+      });
+      pane.addEventListener('keydown',e=>{
+        const delta:Record<string,[number,number]>={ArrowLeft:[-48,0],ArrowRight:[48,0],ArrowUp:[0,-48],ArrowDown:[0,48]};
+        const move=delta[e.key];if(!move)return;e.preventDefault();e.stopPropagation();pane.scrollLeft+=move[0];pane.scrollTop+=move[1];
+      });
+    });
     panes.forEach(pane=>pane.addEventListener('scroll',()=>{for(const other of panes)if(other!==pane){if(other.scrollLeft!==pane.scrollLeft)other.scrollLeft=pane.scrollLeft;if(other.scrollTop!==pane.scrollTop)other.scrollTop=pane.scrollTop;}}));
     if(focusMobileComparison&&window.matchMedia('(max-width:800px)').matches){const body=root.querySelector<HTMLElement>('.inspection-content');const comparison=root.querySelector<HTMLElement>('.compare');if(body&&comparison)body.scrollTop+=comparison.getBoundingClientRect().top-body.getBoundingClientRect().top;}
     updateScrollEdges();

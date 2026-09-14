@@ -45,4 +45,15 @@ export const styles = `
 .feedback-actions .shortcut-hint{flex-basis:auto;order:-1;margin-right:auto}
 .feedback-actions .primary{margin-left:0}
 @media(max-height:800px),(max-width:800px){.feedback-actions .shortcut-hint{display:none}.feedback-actions .primary{margin-left:auto}.review-form .feedback textarea{min-height:56px}.review-form:has(#feedback-form) .decision-notice{margin-bottom:4px}}
+
+.comparison-panel{min-width:0}.comparison-panel .expanded-title{display:none}.comparison-panel .compare-toolbar{justify-content:flex-start}.comparison-panel .overlay-control{margin-left:auto}.comparison-panel #expand-comparison{flex-shrink:0}.pan-viewport.pannable{cursor:move}.pan-viewport img{user-select:none;-webkit-user-drag:none}
+#comparison-dialog{position:fixed;inset:16px;width:calc(100vw - 32px);height:calc(100dvh - 32px);max-width:none;max-height:none;margin:0;padding:24px;background:var(--paper);color:inherit;border:1px solid var(--line);border-radius:8px;box-shadow:0 20px 60px #14292340;overflow:hidden;transform-origin:top left}
+#comparison-dialog::backdrop{background:#172821a6}
+#comparison-dialog .comparison-panel{height:100%;display:flex;flex-direction:column;gap:12px}
+#comparison-dialog .expanded-title{display:block;font-size:20px;line-height:1.3;margin:0;font-weight:500}
+#comparison-dialog .compare-toolbar{flex-shrink:0;margin:0}
+#comparison-dialog .compare{flex:1;min-height:0;max-width:none;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+#comparison-dialog .compare figure{display:flex;flex-direction:column;min-height:0}#comparison-dialog .pan-viewport{flex:1;min-height:0}#comparison-dialog .compare figcaption{flex-shrink:0}
+#comparison-dialog .view-controls{flex-shrink:0;margin:0}
+@media(max-width:600px){#comparison-dialog{inset:6px;width:calc(100vw - 12px);height:calc(100dvh - 12px);padding:14px}.comparison-panel .compare-toolbar{gap:6px}.comparison-panel .overlay-control{padding-inline:8px;font-size:12px}#comparison-dialog .compare{gap:8px}#comparison-dialog .compare figcaption{font-size:11px}}
 `;
