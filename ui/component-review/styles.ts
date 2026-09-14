@@ -37,7 +37,8 @@ export const styles = `
 ` + appLayout + `
 .review-form:has(#feedback-form){max-height:75%;min-height:0;flex-shrink:1;display:flex;flex-direction:column;overflow:hidden;padding-top:8px}
 #feedback-form{display:flex;flex-direction:column;flex:1;min-height:0}
-.feedback-fields{flex:1;min-height:0;overflow:auto;padding:3px}
+/* Leave room inside the scrollport for the 2px focus ring and 3px offset. */
+.feedback-fields{flex:1;min-height:0;overflow:auto;padding:6px}
 .review-form:has(#feedback-form) .decision-notice{flex-shrink:0}
 .review-form:has(#feedback-form) .decisions{display:none}
 .feedback-actions{flex-shrink:0;position:static;background:var(--surface,var(--paper));padding:8px 0;margin-top:8px;box-shadow:0 -5px 8px -6px #24332838}
