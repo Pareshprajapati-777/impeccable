@@ -80,3 +80,13 @@ export function componentPresentation(component: Component) {
     fileLabel: captured ? 'Open captured preview' : 'Open source image',
   };
 }
+
+/** Continue in component order, wrapping once and skipping current decisions.
+ * Carried approvals arrive as versioned decisions; stale ones remain pending. */
+export function nextUnreviewed(packet: ReviewPacket, draft: Draft, after?: string): string | undefined {
+  const start = packet.components.findIndex(c => c.id === after);
+  for (let step = 1; step <= packet.components.length; step++) {
+    const component = packet.components[(start + step) % packet.components.length];
+    if (componentState(component, draft).kind === 'pending') return component.id;
+  }
+}

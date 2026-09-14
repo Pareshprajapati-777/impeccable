@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { approveRemaining, newDraft, submission, summarize, validBox, type ReviewPacket } from './model';
+import { nextUnreviewed, approveRemaining, newDraft, submission, summarize, validBox, type ReviewPacket } from './model';
 const packet: ReviewPacket = { id:'review-1', revision:'packet-1', title:'Test', round:1, comp:{url:'/comp.png',width:100,height:100}, components:[{id:'art',revision:'art-1',name:'Art',medium:'Raster',note:'',box:{x:0,y:0,w:1,h:1},preview:{kind:'image',url:'/art.png'}},{id:'control',revision:'control-1',name:'Button',medium:'HTML',note:'',box:{x:0,y:0,w:.1,h:.1},preview:{kind:'page',url:'/page.html'}}] };
 describe('component review drafts',()=>{
  test('bulk approval still requires explicit inventory confirmation',()=>{const draft=approveRemaining(packet,newDraft(packet));expect(summarize(packet,draft).canSubmit).toBe(false);draft.inventoryConfirmed=true;expect(submission(packet,draft).requestId).toBe(packet.id);});
@@ -44,4 +44,19 @@ test('captured code keeps its implementation identity without trusting medium as
   const captured = {...packet.components[1], preview:{kind:'image' as const, sourceKind:'page' as const, url:'/capture.png'}};
   expect(componentPresentation(captured)).toMatchObject({code:true,captured:true,label:'HTML',caption:'Rendered component',fileLabel:'Open captured preview'});
   expect(componentPresentation(packet.components[1]).caption).toBe('Live component');
+});
+
+
+test('review progression skips decisions, wraps, and revisits stale components', () => {
+  const draft = newDraft(packet);
+  expect(nextUnreviewed(packet,draft)).toBe(packet.components[0].id);
+  const first=packet.components[0],second=packet.components[1];
+  draft.decisions[first.id]={revision:first.revision,action:'revise',feedback:'',split:false};
+  expect(nextUnreviewed(packet,draft,first.id)).toBe(second.id);
+  expect(nextUnreviewed(packet,draft,second.id)).toBe(second.id);
+  draft.decisions[second.id]={revision:second.revision,action:'approve',feedback:'',split:false};
+  expect(nextUnreviewed(packet,draft,second.id)).toBeUndefined();
+  draft.decisions[first.id].revision='stale';
+  expect(nextUnreviewed(packet,draft,second.id)).toBe(first.id);
+  expect(nextUnreviewed({...packet,components:[]},draft)).toBeUndefined();
 });

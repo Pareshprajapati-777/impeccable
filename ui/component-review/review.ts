@@ -1,4 +1,4 @@
-import { componentPresentation, approveRemaining, componentState, repairStatus, newDraft, submission, summarize, type Box, type Draft, type ReviewPacket, type ReviewHistory } from './model';
+import { componentPresentation, nextUnreviewed, approveRemaining, componentState, repairStatus, newDraft, submission, summarize, type Box, type Decision, type Draft, type ReviewPacket, type ReviewHistory } from './model';
 import { comparisonSize } from './viewport';
 import { styles } from './styles';
 import { icon } from './icons';
@@ -23,9 +23,14 @@ export function mountComponentReview(host: HTMLElement, packet: ReviewPacket, op
   let sending = false;
   let submitted = options.completed ?? false;
   let error = '';
+  const edits: Record<string, {feedback: string; split: boolean}> = {};
+  let finished = false;
+  let lastDecision: {id: string; name: string; action: 'approve' | 'revise'; previous?: Decision} | null = null;
+  const shortcutLabel = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘Enter' : 'Ctrl+Enter';
   let overlay = false;
   let showAll = false;
   let trayOpen = true;
+  let restoreTrayAfterFeedback = false;
   let mobilePane: 'comp' | 'component' = 'comp';
   let renderedMobilePane = mobilePane as 'comp' | 'component';
   let zoom: 'fit' | number = 'fit';
@@ -40,27 +45,48 @@ export function mountComponentReview(host: HTMLElement, packet: ReviewPacket, op
   const checkIcon = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8 3 3 7-7"/></svg>';
   const feedbackIcon = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 11 1 2 2-1 7-7-3-3-7 7v2Z"/></svg>';
   const boxStyle = (b: Box) => `left:${pct(b.x)};top:${pct(b.y)};width:${pct(b.w)};height:${pct(b.h)}`;
+  function focusReview(id: string) {
+    root.getElementById(id)?.focus({preventScroll:true});
+  }
+  function advance(after: string) {
+    const next = nextUnreviewed(packet, draft, after);
+    finished = !next;
+    if (next) selected = next;
+    mobilePane='component'; previousRound=false; overlay=false; zoom='fit'; outputMode='isolated';
+    if (inventoryFilter==='approved') inventoryFilter='attention';
+    render();
+    focusReview(finished ? 'review-summary' : edits[selected!] ? 'feedback' : 'approve');
+  }
   function updateDecision(action: 'approve' | 'revise') {
+    if (sending || submitted || previousRound) return;
     const c = packet.components.find(c => c.id === selected);
     if (!c) return;
-    draft.decisions[c.id] = {revision:c.revision, action, feedback:draft.decisions[c.id]?.feedback ?? '', split: action === 'revise' && (draft.decisions[c.id]?.split ?? false)};
+    const saved = draft.decisions[c.id];
+    const current = saved?.revision===c.revision ? saved : undefined;
+    lastDecision = {id:c.id, name:c.name, action, previous:saved ? {...saved} : undefined};
+    const note = edits[c.id] ?? current;
+    draft.decisions[c.id] = {revision:c.revision, action, feedback:action==='revise' ? note?.feedback ?? '' : '', split:action==='revise' && (note?.split ?? false)};
+    delete edits[c.id];
+    if(restoreTrayAfterFeedback){trayOpen=true;restoreTrayAfterFeedback=false;}
+    advance(c.id);
+  }
+  function beginFeedback() {
+    if (sending || submitted || previousRound) return;
+    const c = packet.components.find(c=>c.id===selected);
+    if (!c) return;
+    const saved = draft.decisions[c.id];
+    const current = saved?.revision===c.revision ? saved : undefined;
+    edits[c.id] ??= {feedback:current?.feedback ?? '',split:current?.split ?? false};
+    if(trayOpen && (root.querySelector('.workbench')?.clientHeight ?? 0)<420){restoreTrayAfterFeedback=true;trayOpen=false;}
+    finished=false;
     render();
-    if(action==='revise') {
-      const field=root.querySelector<HTMLTextAreaElement>('#feedback');
-      field?.focus({preventScroll:true});
-      const form=root.querySelector<HTMLElement>('.review-form');
-      if(form&&field){const overflow=field.getBoundingClientRect().bottom-form.getBoundingClientRect().bottom;if(overflow>0)form.scrollTop+=overflow+8;}
-      const pane=root.querySelector<HTMLElement>('.inspection-content');
-      const comparison=root.querySelector<HTMLElement>('.compare');
-      if(pane&&comparison)pane.scrollTop+=comparison.getBoundingClientRect().top-pane.getBoundingClientRect().top;
-
-    }
+    focusReview('feedback');
   }
   function addMissing(box: Box) {
     const id = `missing-${crypto.randomUUID()}`;
     draft.missing.push({ id, name:'Missing component', feedback:'', box });
     draft.inventoryConfirmed = false;
-    selected = id; mobilePane='component'; marking = false; drag = null; dragBox = null;
+    finished=false; selected = id; mobilePane='component'; marking = false; drag = null; dragBox = null;
     render();
     root.querySelector<HTMLInputElement>('#missing-name')?.focus();
   }
@@ -86,6 +112,10 @@ export function mountComponentReview(host: HTMLElement, packet: ReviewPacket, op
     const index = c ? packet.components.indexOf(c) + 1 : packet.components.length + draft.missing.findIndex(m => m.id === selected) + 1;
     const savedDecision = c ? draft.decisions[c.id] : undefined;
     const d = savedDecision?.revision === c?.revision ? savedDecision : undefined;
+    const edit = c ? edits[c.id] : undefined;
+    const uncommitted = Object.keys(edits).length > 0;
+    const isLast = c ? !packet.components.some(item=>item.id!==c.id && componentState(item,draft).kind==='pending') : false;
+    const notice = lastDecision ? `<div class="decision-notice"><span role="status">${esc(lastDecision.name)} ${lastDecision.action==='approve'?'approved':'flagged for repair'}.</span><button id="undo-decision" class="quiet">Undo</button></div>` : '';
     const stats = summarize(packet, draft);
     const history = options.history;
     const repair = c ? repairStatus(c.id, history) : undefined;
@@ -107,7 +137,7 @@ export function mountComponentReview(host: HTMLElement, packet: ReviewPacket, op
       addedCount ? `${addedCount} added` : '',
       history?.removed.length ? `${history.removed.length} removed` : '',
     ].filter(Boolean).join(' · ');
-    const statusMessage = error || (submitted ? (options.preview ? 'Preview submitted. No run changed.' : 'Review submitted.') : stats.hasFeedback ? 'Ready to send for corrections.' : stats.pending ? `${stats.pending} left to review` : !draft.inventoryConfirmed ? 'Confirm the map is complete.' : 'Ready to continue.');
+    const statusMessage = error || (uncommitted ? 'Save or cancel your open feedback before sending.' : submitted ? (options.preview ? 'Preview submitted. No run changed.' : 'Review submitted.') : stats.hasFeedback ? 'Ready to send for corrections.' : stats.pending ? `${stats.pending} left to review` : !draft.inventoryConfirmed ? 'Confirm the map is complete.' : 'Ready to continue.');
     const presentation = v ? componentPresentation(v) : null;
     const isRaster = v?.preview.kind === 'image' && !presentation?.code;
     const useContext = !!(v?.context && outputMode === 'context');
@@ -124,7 +154,7 @@ export function mountComponentReview(host: HTMLElement, packet: ReviewPacket, op
           <div class="section-head"><h2>Approved comp</h2><button id="mark" class="label-icon" aria-pressed="${marking}">${icon(marking?'close':'mark')}${marking ? 'Cancel' : 'Mark missing'}</button></div>
           <div class="map-space"><div class="map ${marking ? 'marking' : ''}" style="aspect-ratio:${packet.comp.width}/${packet.comp.height}">
             <img class="comp" src="${url(packet.comp.url)}" alt="Approved composition for ${esc(packet.title)}" draggable="false">
-            ${box ? `<div class="region" style="${boxStyle(box)}"></div>` : ''}
+            ${box && !finished ? `<div class="region" style="${boxStyle(box)}"></div>` : ''}
             ${packet.components.map((item,i) => {const state=stateFor(item);return `<button class="pin ${state.kind} ${selected === item.id ? 'selected' : ''}" data-select="${esc(item.id)}" style="left:${pct(Math.min(.96, item.box.x+item.box.w/2))};top:${pct(Math.max(.035,item.box.y))}" aria-label="Inspect ${esc(item.name)} — ${esc(state.label)}" title="${i+1}. ${esc(item.name)} · ${esc(state.label)}" aria-pressed="${selected === item.id}">${state.kind==='approved'?checkIcon:state.kind==='feedback'?feedbackIcon:''}<span>${i+1}</span></button>`}).join('')}
             ${draft.missing.map((item,i)=>`<button class="pin feedback ${selected===item.id?'selected':''}" data-select="${esc(item.id)}" style="left:${pct(item.box.x+item.box.w/2)};top:${pct(item.box.y)}" aria-label="Inspect missing ${esc(item.name)}" title="Missing: ${esc(item.name)}">${feedbackIcon}<span>${packet.components.length+i+1}</span></button>`).join('')}
 
@@ -134,8 +164,8 @@ export function mountComponentReview(host: HTMLElement, packet: ReviewPacket, op
           ${marking ? '<div class="map-caption">Draw around the missing piece.<button id="add-box">Add an adjustable box</button></div>' : ''}
         </section>
         <section class="inspector" aria-label="Selected component">
-          <div class="section-head"><h2><span class="number">${index}</span> ${esc(c?.name ?? missing?.name ?? 'Component')}</h2></div><div class="inspection-content" role="region" aria-label="Component comparison" tabindex="0">
-          ${c ? `<div class="material">${icon(presentation!.code ? 'code' : 'image')}<strong>${esc(materialLabel)}</strong><span>${v?.material ? `${v.material.width} × ${v.material.height} px` : ''}</span>${v?.preview.kind==='image'?`<a class="icon-button source-link" href="${url(v!.preview.url)}" target="_blank" rel="noopener" aria-label="${presentation!.fileLabel}" title="${presentation!.fileLabel}">${icon('external')}</a>`:''}</div>
+          <div class="section-head"><h2>${finished ? 'Review summary' : `<span class="number">${index}</span> ${esc(c?.name ?? missing?.name ?? 'Component')}`}</h2></div><div class="inspection-content" role="region" aria-label="Component comparison" tabindex="0">
+          ${finished ? `<section class="review-summary" id="review-summary" tabindex="-1"><h2>Components reviewed.</h2><p>${stats.approved} approved · ${stats.revisions} flagged for repair${draft.missing.length ? ` · ${draft.missing.length} missing` : ''}</p><p>Check your decisions below. ${stats.hasFeedback ? 'Send feedback when you’re ready.' : 'Confirm nothing is missing, then approve and continue.'}</p><div class="summary-decisions">${packet.components.map(item=>{const decision=draft.decisions[item.id];return `<button data-select="${esc(item.id)}"><strong>${esc(item.name)}</strong><span>${decision?.action==='revise' ? 'Needs work' : 'Approved'}</span>${decision?.action==='revise' ? `<small>${esc(decision.feedback || 'No note — agent will diagnose.')}</small>` : ''}</button>`;}).join('')}${draft.missing.map(item=>`<button data-select="${esc(item.id)}"><strong>${esc(item.name)}</strong><span>Missing</span><small>${esc(item.feedback)}</small></button>`).join('')}</div></section></div><div class="review-form">${notice}</div>` : c ? `<div class="material">${icon(presentation!.code ? 'code' : 'image')}<strong>${esc(materialLabel)}</strong><span>${v?.material ? `${v.material.width} × ${v.material.height} px` : ''}</span>${v?.preview.kind==='image'?`<a class="icon-button source-link" href="${url(v!.preview.url)}" target="_blank" rel="noopener" aria-label="${presentation!.fileLabel}" title="${presentation!.fileLabel}">${icon('external')}</a>`:''}</div>
           ${history ? `<div class="repair-context">
             ${repair?.prior?.action==='revise'?`<section class="previous-feedback" aria-label="Previous feedback"><h3>Previous feedback <span>Round ${repair.feedbackRound}</span></h3><p class="previous-verdict">Needs work</p><blockquote>${esc(repair.prior.feedback || 'No written feedback was supplied.')}</blockquote>${repair.prior.split?'<p>Requested: split into separately reviewable components.</p>':''}</section>`:repair?.carried?`<p class="kept-approval">Unchanged · approval kept</p>`:''}
             ${repair?.change?.kind==='changed'?`<details class="changed-files" ${filesOpen?'open':''}><summary>${repair.change.files.length?`${repair.change.files.length} changed ${repair.change.files.length===1?'file':'files'}`:repair.change.reasons.includes('region')?'Region changed':priorComponent?.note!==c.note?'Description changed · files unchanged':'Component definition changed · files unchanged'}</summary>${repair.change.files.length?`<ul>${repair.change.files.map(path=>`<li>${esc(path)}</li>`).join('')}</ul>`:''}${priorComponent&&priorComponent.note!==c.note?`<dl class="description-diff"><dt>Previous description</dt><dd>${esc(priorComponent.note)}</dd><dt>Current description</dt><dd>${esc(c.note)}</dd></dl>`:''}</details>`:''}
@@ -149,36 +179,48 @@ export function mountComponentReview(host: HTMLElement, packet: ReviewPacket, op
           ${isRaster ? `<div class="view-controls">${v!.context ? `<div role="group" aria-label="Asset view"><button id="isolated" aria-pressed="${!useContext}">Asset only</button><button id="context" aria-pressed="${useContext}">In page</button></div>` : ''}<div class="background-options" role="group" aria-label="Asset preview background"><button id="background-checker" class="swatch-button" aria-label="Checkerboard background" title="Checkerboard background" aria-pressed="${backdrop==='checker'}" ${useContext?'disabled':''}><span class="background-swatch checker"></span></button><button id="background-page" class="swatch-button" aria-label="${vp.comp.background?'Page color':'Neutral'} background" title="${vp.comp.background?'Page color':'Neutral'} background" aria-pressed="${backdrop==='page'}" ${useContext?'disabled':''}><span class="background-swatch page-swatch"></span></button></div></div>` : ''}
           <div class="component-details"><p class="layering">${esc(v?.context?.layering ?? 'Layer placement not recorded.')}</p>
           <p class="component-note">${esc(v!.note)}</p>
-          </div></div><div class="review-form">${viewingPrevious?'<p class="previous-notice">Viewing the previous round. Return to Current to make a decision.</p>':''}<div class="decisions" role="group" aria-label="Decision for ${esc(c.name)}"><div class="decision-title"><strong>Your review <span>Round ${packet.round}</span></strong>${viewingPrevious?'<p>Return to Current to review this round.</p>':''}</div><button id="approve" class="decision-approve ${d?.action === 'approve' ? 'approved' : ''}" aria-pressed="${d?.action === 'approve'}">Looks good</button><button id="revise" class="decision-revise ${d?.action === 'revise' ? 'revise' : ''}" aria-pressed="${d?.action === 'revise'}">Needs work</button>${d ? `<button id="clear" class="quiet icon-button" aria-label="Clear decision" title="Clear decision">${icon('undo')}</button>` : ''}</div>
-          ${d?.action === 'revise' ? `<label class="feedback">New feedback <span>Optional</span><textarea id="feedback" placeholder="What still needs to change in this version?">${esc(d.feedback)}</textarea></label><label class="check"><input id="split" type="checkbox" ${d.split ? 'checked' : ''}> Split into separately reviewable components</label>` : ''}
+          </div></div><div class="review-form">${notice}${viewingPrevious?'<p class="previous-notice">Viewing the previous round. Return to Current to make a decision.</p>':''}<div class="decisions" role="group" aria-label="Decision for ${esc(c.name)}"><div class="decision-title"><strong>Your review <span>Round ${packet.round}</span></strong>${viewingPrevious?'<p>Return to Current to review this round.</p>':''}</div><button id="approve" class="decision-approve ${d?.action === 'approve' ? 'approved' : ''}" aria-pressed="${d?.action === 'approve'}">Looks good</button><button id="revise" class="decision-revise ${d?.action === 'revise' ? 'revise' : ''}" aria-pressed="${d?.action === 'revise'}">Needs work</button>${d ? `<button id="clear" class="quiet icon-button" aria-label="Clear decision" title="Clear decision">${icon('undo')}</button>` : ''}</div>
+          ${edit ? `<form id="feedback-form"><div class="feedback-fields"><label class="feedback">What needs to change?<textarea id="feedback" aria-describedby="feedback-hint">${esc(edit.feedback)}</textarea></label><p id="feedback-hint" class="feedback-hint">Optional — leave blank for the agent to diagnose.</p><label class="check"><input id="split" type="checkbox" ${edit.split ? 'checked' : ''}> Split into separately reviewable components</label></div><div class="feedback-actions"><button id="cancel-feedback" type="button" class="quiet">Cancel</button><button id="save-feedback" type="submit" class="primary">${isLast?'Save & finish review':'Save & next'} <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15m-6-6 6 6-6 6"/></svg></button><span class="shortcut-hint">${shortcutLabel}</span></div></form>` : d?.action==='revise' ? `<p class="saved-feedback">${esc(d.feedback || 'No note — agent will diagnose.')}</p>` : ''}
           </div>` : missing ? `<p>This piece will be added to the unresolved inventory.</p><label class="feedback">Name<input id="missing-name" value="${esc(missing.name)}"></label><label class="feedback">What is missing?<textarea id="missing-feedback">${esc(missing.feedback)}</textarea></label><div class="coordinates">${(['x','y','w','h'] as const).map(k=>`<label>${{x:'Left',y:'Top',w:'Width',h:'Height'}[k]} %<input type="number" data-coordinate="${k}" value="${Math.round(missing.box[k]*1000)/10}" min="0" max="100" step="0.1"></label>`).join('')}</div><button id="remove-missing">Remove this mark</button></div>` : '<p>No components supplied.</p></div>'}
         </section>
       </div>
       <section class="inventory-section ${trayOpen?'':'tray-collapsed'} ${showAll&&trayOpen?'tray-expanded':''}" aria-label="Component inventory"><div class="section-head"><h2>Components</h2><div class="inventory-filters" role="group" aria-label="Filter components"><button data-filter="attention" aria-pressed="${inventoryFilter==='attention'}">Needs attention <b>${attentionCount}</b></button><button data-filter="approved" aria-pressed="${inventoryFilter==='approved'}">Approved <b>${stats.approved}</b></button><button data-filter="all" aria-pressed="${inventoryFilter==='all'}">All <b>${packet.components.length+draft.missing.length}</b></button></div><div class="tray-actions"><button id="show-all" class="icon-button" aria-pressed="${showAll}" aria-controls="component-tray" aria-label="${showAll?'Compact':'Expand'} tray" title="${showAll?'Compact':'Expand'} tray">${icon(showAll?'compact':'expand')}</button><button id="toggle-tray" class="icon-button" aria-expanded="${trayOpen}" aria-controls="component-tray" aria-label="${trayOpen?'Hide':'Show'} component tray" title="${trayOpen?'Hide':'Show'} component tray">${icon(trayOpen?'hideTray':'showTray')}</button></div></div>
       <div id="component-tray" class="inventory ${showAll ? 'all' : ''}">${shownComponents.map(item=>{const i=packet.components.indexOf(item);const state=stateFor(item); return `<button class="item ${state.kind} ${selected === item.id ? 'active' : ''}" data-select="${esc(item.id)}" aria-pressed="${selected === item.id}">${item.thumbnail ? `<span class="item-thumb">${item.thumbnail.box ? `<span class="thumb-crop" style="width:min(100%,${76*item.thumbnail.box.w*packet.comp.width/(item.thumbnail.box.h*packet.comp.height)}px);aspect-ratio:${item.thumbnail.box.w*packet.comp.width}/${item.thumbnail.box.h*packet.comp.height}"><img alt="" loading="lazy" src="${url(item.thumbnail.url)}" style="position:absolute;width:${100/item.thumbnail.box.w}%;max-width:none;left:${-100*item.thumbnail.box.x/item.thumbnail.box.w}%;top:${-100*item.thumbnail.box.y/item.thumbnail.box.h}%;"></span>` : `<img alt="" loading="lazy" src="${url(item.thumbnail.url)}">`}</span>` : ''}<span class="item-number">${state.kind==='approved'?checkIcon:state.kind==='feedback'?feedbackIcon:''}${i+1}<span class="item-medium">${icon(componentPresentation(item).code ? 'code' : 'image')}${esc(componentPresentation(item).label)}</span></span><strong>${esc(item.name)}</strong><span class="state ${state.kind}">${esc(state.label)}</span></button>`}).join('')}${(inventoryFilter==='approved'?[]:draft.missing).map((m,i)=>`<button class="item feedback ${selected===m.id?'active':''}" data-select="${esc(m.id)}"><span class="item-number">${packet.components.length+i+1}</span><strong>${esc(m.name)}</strong><span class="state revise">Missing</span></button>`).join('')}${!shownComponents.length&&(inventoryFilter==='approved'||!draft.missing.length)?`<p class="inventory-empty">${inventoryFilter==='attention'?'Every component is approved. Confirm the map is complete, then continue.':'No components approved yet.'}</p>`:''}</div></section>
-      <footer><div><button id="approve-rest" ${!stats.pending ? 'disabled' : ''}>Approve ${stats.approved || stats.revisions ? 'remaining' : 'all'}</button><label class="check"><input id="inventory-confirm" type="checkbox" ${draft.inventoryConfirmed?'checked':''}> Nothing missing from the comp</label></div><div class="submit-area"><p role="status">${esc(statusMessage)}</p><button id="submit" class="primary" ${!stats.canSubmit || sending || submitted?'disabled':''}>${sending?'Sending…':stats.hasFeedback?'Send feedback':'Approve & continue'}</button></div></footer>
+      <footer><div><button id="approve-rest" ${!stats.pending || uncommitted ? 'disabled' : ''}>Approve ${stats.approved || stats.revisions ? 'remaining' : 'all'}</button><label class="check"><input id="inventory-confirm" type="checkbox" ${draft.inventoryConfirmed?'checked':''}> Nothing missing from the comp</label></div><div class="submit-area"><p role="status">${esc(statusMessage)}</p><button id="submit" class="primary" ${!stats.canSubmit || uncommitted || sending || submitted?'disabled':''}>${sending?'Sending…':stats.hasFeedback?'Send feedback':'Approve & continue'}</button></div></footer>
     </section>`;
-    if(viewingPrevious)root.querySelectorAll<HTMLButtonElement|HTMLInputElement|HTMLTextAreaElement>('.decisions button,#feedback,#split,#approve-rest,#submit,#inventory-confirm').forEach(el=>el.disabled=true);
+    if(viewingPrevious)root.querySelectorAll<HTMLButtonElement|HTMLInputElement|HTMLTextAreaElement>('.decisions button,#feedback,#split,#save-feedback,#cancel-feedback,#undo-decision,#approve-rest,#submit,#inventory-confirm').forEach(el=>el.disabled=true);
     root.querySelector('.inspection-content')!.scrollTop=inspectorTop;
-    if(submitted||sending)root.querySelectorAll<HTMLButtonElement|HTMLInputElement|HTMLTextAreaElement>('.decisions button,#approve-rest,#mark,#inventory-confirm,#missing-name,#missing-feedback,#feedback,#split,#remove-missing,[data-coordinate]').forEach(el=>el.disabled=true);
+    if(submitted||sending)root.querySelectorAll<HTMLButtonElement|HTMLInputElement|HTMLTextAreaElement>('.decisions button,#save-feedback,#cancel-feedback,#undo-decision,#approve-rest,#mark,#inventory-confirm,#missing-name,#missing-feedback,#feedback,#split,#remove-missing,[data-coordinate]').forEach(el=>el.disabled=true);
     root.querySelector('.inventory')!.scrollLeft = railLeft;
     if(!keepInspector&&trayOpen)Array.from(root.querySelectorAll<HTMLElement>('.inventory [data-select]')).find(el=>el.dataset.select===selected)?.scrollIntoView({block:'nearest',inline:'nearest'});
     if (focusId) root.getElementById(focusId)?.focus({preventScroll:true});
     else if(focusSelection) Array.from(root.querySelectorAll<HTMLElement>('.item[data-select]')).find(el=>el.dataset.select===focusSelection)?.focus({preventScroll:true});
     const on = (id:string, action:()=>void) => root.querySelector(`#${id}`)?.addEventListener('click', action);
-    root.querySelectorAll<HTMLElement>('[data-select]').forEach(el => el.onclick = () => {if(marking)return; selected=el.dataset.select!; mobilePane='component'; overlay=false; zoom='fit'; outputMode='isolated'; previousRound=false; render();});
+    root.querySelectorAll<HTMLElement>('[data-select]').forEach(el => el.onclick = () => {if(marking)return; finished=false; selected=el.dataset.select!; mobilePane='component'; overlay=false; zoom='fit'; outputMode='isolated'; previousRound=false; render();});
     on('previous-round',()=>{previousRound=true;render();});
     on('current-round',()=>{previousRound=false;render();});
-    on('review-changes',()=>{const pending=orderedComponents().filter(item=>stateFor(item).kind==='pending');const current=pending.findIndex(item=>item.id===selected);const next=pending[(current+1)%pending.length];if(next){selected=next.id;mobilePane='component';inventoryFilter='attention';previousRound=false;zoom='fit';overlay=false;outputMode='isolated';render();}});
+    on('review-changes',()=>{const pending=orderedComponents().filter(item=>stateFor(item).kind==='pending');const current=pending.findIndex(item=>item.id===selected);const next=pending[(current+1)%pending.length];if(next){finished=false;selected=next.id;mobilePane='component';inventoryFilter='attention';previousRound=false;zoom='fit';overlay=false;outputMode='isolated';render();}});
     root.querySelectorAll<HTMLButtonElement>('[data-filter]').forEach(button=>button.onclick=()=>{
-      inventoryFilter=button.dataset.filter as typeof inventoryFilter;
+      finished=false;inventoryFilter=button.dataset.filter as typeof inventoryFilter;
       const matches=orderedComponents().filter(item=>inventoryFilter==='all'||(stateFor(item).kind==='approved')===(inventoryFilter==='approved'));
       const selectedMissing=inventoryFilter!=='approved'&&draft.missing.some(item=>item.id===selected);
       if(!selectedMissing&&!matches.some(item=>item.id===selected)&&matches.length){selected=matches[0].id;mobilePane='component';previousRound=false;zoom='fit';overlay=false;outputMode='isolated';}
       render();
     });
-    on('approve',()=>updateDecision('approve')); on('revise',()=>updateDecision('revise'));
-    on('clear',()=>{if(c)delete draft.decisions[c.id]; render();});
+    on('approve',()=>updateDecision('approve')); on('revise',beginFeedback);
+    on('clear',()=>{if(c){delete draft.decisions[c.id];delete edits[c.id];}lastDecision=null; render();});
+    on('cancel-feedback',()=>{if(c)delete edits[c.id];if(restoreTrayAfterFeedback){trayOpen=true;restoreTrayAfterFeedback=false;}render();focusReview('revise');});
+    root.querySelector('#feedback-form')?.addEventListener('submit',e=>{e.preventDefault();updateDecision('revise');});
+    root.querySelector('#feedback')?.addEventListener('keydown',e=>{
+      const key=e as KeyboardEvent;
+      if(key.key==='Enter'&&(key.metaKey||key.ctrlKey)&&!key.isComposing){key.preventDefault();key.stopPropagation();updateDecision('revise');}
+    });
+    on('undo-decision',()=>{
+      if(!lastDecision||sending||submitted)return;
+      const previous=lastDecision;
+      if(previous.previous)draft.decisions[previous.id]=previous.previous;else delete draft.decisions[previous.id];
+      delete edits[previous.id];selected=previous.id;finished=false;previousRound=false;mobilePane='component';inventoryFilter='all';lastDecision=null;render();focusReview('approve');
+    });
     on('overlay',()=>{overlay=!overlay; render();});
     on('isolated',()=>{outputMode='isolated';render();});
     on('context',()=>{outputMode='context';render();});
@@ -186,16 +228,16 @@ export function mountComponentReview(host: HTMLElement, packet: ReviewPacket, op
     on('background-checker',()=>{backdrop='checker';render();});
     on('background-page',()=>{backdrop='page';render();});
     on('show-all',()=>{showAll=!showAll;trayOpen=true;render();});
-    on('toggle-tray',()=>{trayOpen=!trayOpen;render();});
+    on('toggle-tray',()=>{restoreTrayAfterFeedback=false;trayOpen=!trayOpen;render();});
     on('show-comp',()=>{mobilePane='comp';render();});
     on('show-component',()=>{mobilePane='component';render();});
     on('mark',()=>{marking=!marking;render();}); on('add-box',()=>addMissing({x:.35,y:.35,w:.2,h:.2}));
     on('remove-missing',()=>{draft.missing=draft.missing.filter(m=>m.id!==selected);selected=packet.components[0]?.id;render();});
-    on('approve-rest',()=>{draft=approveRemaining(packet,draft);render();});
+    on('approve-rest',()=>{if(uncommitted)return;draft=approveRemaining(packet,draft);lastDecision=null;finished=true;mobilePane='component';render();focusReview('review-summary');});
     root.querySelector('#inventory-confirm')?.addEventListener('change',e=>{draft.inventoryConfirmed=(e.target as HTMLInputElement).checked;render();});
-    root.querySelector('#feedback')?.addEventListener('input',e=>{if(c)draft.decisions[c.id].feedback=(e.target as HTMLTextAreaElement).value;});
-    root.querySelector('#split')?.addEventListener('change',e=>{if(c)draft.decisions[c.id].split=(e.target as HTMLInputElement).checked;});
-    root.querySelector('#missing-name')?.addEventListener('input',e=>{if(missing)missing.name=(e.target as HTMLInputElement).value; const submit=root.querySelector<HTMLButtonElement>('#submit');if(submit)submit.disabled=!summarize(packet,draft).canSubmit;});
+    root.querySelector('#feedback')?.addEventListener('input',e=>{if(c&&edits[c.id])edits[c.id].feedback=(e.target as HTMLTextAreaElement).value;});
+    root.querySelector('#split')?.addEventListener('change',e=>{if(c&&edits[c.id])edits[c.id].split=(e.target as HTMLInputElement).checked;});
+    root.querySelector('#missing-name')?.addEventListener('input',e=>{if(missing)missing.name=(e.target as HTMLInputElement).value; const submit=root.querySelector<HTMLButtonElement>('#submit');if(submit)submit.disabled=uncommitted||sending||submitted||!summarize(packet,draft).canSubmit;});
     root.querySelector('#missing-feedback')?.addEventListener('input',e=>{if(missing)missing.feedback=(e.target as HTMLTextAreaElement).value;});
     root.querySelectorAll<HTMLInputElement>('[data-coordinate]').forEach(el=>el.addEventListener('change',()=>{
       if(!missing)return; const k=el.dataset.coordinate as keyof Box;
@@ -203,7 +245,7 @@ export function mountComponentReview(host: HTMLElement, packet: ReviewPacket, op
       if(Number.isFinite(next)) missing.box[k]=Math.max(k==='w'||k==='h'?.001:0, Math.min(1,next));
       missing.box.w=Math.min(missing.box.w,1-missing.box.x);missing.box.h=Math.min(missing.box.h,1-missing.box.y);render();
     }));
-    on('submit',async()=>{sending=true;error='';render();try{await options.onSubmit(submission(packet,draft));submitted=true;}catch(e){error=e instanceof Error?e.message:'Could not save. Try again.';}finally{sending=false;render();}});
+    on('submit',async()=>{if(uncommitted||sending||submitted)return;sending=true;error='';render();try{await options.onSubmit(submission(packet,draft));submitted=true;}catch(e){error=e instanceof Error?e.message:'Could not save. Try again.';}finally{sending=false;render();}});
     const map = root.querySelector<HTMLElement>('.map')!;
     function point(e: PointerEvent) {const r=map.getBoundingClientRect();return {x:Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)),y:Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))};}
     map.addEventListener('pointerdown',e=>{if(!marking)return;drag=point(e);map.setPointerCapture(e.pointerId);e.preventDefault();});
