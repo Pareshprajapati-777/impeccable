@@ -110,6 +110,21 @@ pub fn freeze(project: &Path, input: &Value) -> Result<(Value, BTreeMap<String, 
     }
     let mut files = BTreeMap::new();
     let mut comp_files = BTreeMap::new();
+    // The component inventory is measured against this spec. Bind it centrally
+    // rather than requiring every component author to repeat this dependency.
+    if input["stage"] == "components" {
+        let spec_path = ".impeccable/build/spec.json";
+        comp_files.insert(spec_path.into(), pin(project, spec_path, &mut files)?);
+        let spec: Value = serde_json::from_slice(&files[spec_path]).map_err(|e| e.to_string())?;
+        for region in spec["regions"].as_array().ok_or("measured spec needs regions")? {
+            let component = input["components"].as_array().and_then(|items| items.iter().find(|c| c["id"] == region["id"]))
+                .ok_or_else(|| format!("component review omitted measured region {}", region["id"]))?;
+            if matches!(region["kind"].as_str(), Some("text" | "control")) && component["preview"]["kind"] != "page" {
+                return Err(format!("semantic region {} requires a rendered code preview", region["id"]));
+            }
+        }
+    }
+
     view(&mut packet["comp"], project, &mut files, &mut comp_files)?;
     let mut ids = BTreeSet::new();
     let components = packet["components"]

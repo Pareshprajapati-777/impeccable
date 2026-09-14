@@ -81,7 +81,7 @@ inventory confirmation is independently required before approval submission.
 
 Use `impeccable component-review capture --manifest review.json` instead of
 `prepare` when the component packet needs native provenance. Both use the same
-versioned store, service and decision contract. PNG raster previews remain their
+versioned store, service and decision contract. Static PNG, WebP and JPEG raster previews remain their
 actual files (including alpha). Page previews become native PNG crops captured
 at the comp's declared viewport and component box. Context views, when supplied,
 are captured too; thumbnails reuse the primary output. Supply isolated component
@@ -96,7 +96,7 @@ DOM and network stay stable across capture. The manifest itself is bound too.
 A dependency or region change makes pending submission stale. Capture failure
 never replaces an existing review round or substitutes supplied screenshots.
 
-V1 supports PNG files and static HTML/CSS/inline SVG documents. Scripted, canvas,
+V1 supports static PNG, WebP and JPEG files and static HTML/CSS/inline SVG documents. Animated WebP is rejected. Component-stage capture binds the measured spec centrally and rejects missing measured regions or rasterized controls. Scripted, canvas,
 framed and actively animated components are rejected instead of accepting their
 fallback. CSS reduced-motion behavior is respected through the browser preference;
 styles are not rewritten to make a capture pass. This is provenance for the

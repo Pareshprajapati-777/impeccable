@@ -23,15 +23,8 @@ fn source(view: &Value) -> Result<&str, String> {
         .ok_or_else(|| "preview needs a pinned source".into())
 }
 fn material(png: &[u8], format: &str) -> Result<Value, String> {
-    if !impeccable_comp::png_io::is_png(png) || png.len() < 24 {
-        return Err("native review currently requires PNG raster assets".into());
-    }
-    let width = u32::from_be_bytes(png[16..20].try_into().unwrap());
-    let height = u32::from_be_bytes(png[20..24].try_into().unwrap());
-    if u64::from(width) * u64::from(height) > 32_000_000 {
-        return Err("preview exceeds 32 megapixels".into());
-    }
-    let image = impeccable_comp::png_io::decode_png(png)?.image;
+    let (image, source_format) = impeccable_comp::png_io::decode_review_image(png)?;
+    let format = if format == "Captured HTML / CSS / SVG" { format } else { source_format };
     Ok(
         json!({"format":format,"width":image.width,"height":image.height,"alpha":if image.data.chunks_exact(4).any(|p|p[3]<255){"transparent"}else{"opaque"}}),
     )
@@ -158,7 +151,7 @@ impl ComponentCapturer for NativeComponentCapturer {
             .ok_or("missing approved reference")?;
         let reference_size = material(reference, "PNG")?;
         if reference_size["width"] != width || reference_size["height"] != height {
-            return Err("comp dimensions do not match its PNG".into());
+            return Err("comp dimensions do not match its image".into());
         }
         let env = std::env::vars().collect();
         let exe =

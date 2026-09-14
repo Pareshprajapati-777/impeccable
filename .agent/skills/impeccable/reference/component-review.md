@@ -38,7 +38,7 @@ Write `.impeccable/review/components.json` with this manifest format:
 }
 ```
 
-The coordinates above only illustrate the schema. Use the approved comp's actual pixel dimensions and each measured region's normalized bounds (`x / width`, `y / height`, `w / width`, `h / height`). A code preview is rendered at the comp viewport and cropped to that component's box, so place its content at those coordinates in the review document. Include every file the document uses in `dependencies`, including linked CSS, fonts and images. Local paths only. PNG previews preserve their actual transparency; never draw a checkerboard into the asset.
+The coordinates above only illustrate the schema. Use the approved comp's actual pixel dimensions and each measured region's normalized bounds (`x / width`, `y / height`, `w / width`, `h / height`). A code preview is rendered at the comp viewport and cropped to that component's box, so place its content at those coordinates in the review document. Include every file the document uses in `dependencies`, including linked CSS, fonts and images. The runtime also binds the measured spec for the component stage and checks its inventory. Local paths only. Static PNG, WebP and JPEG previews retain their original bytes and actual transparency; never draw a checkerboard into the asset.
 
 Native capture supports stable HTML/CSS and inline SVG. Supply a static review state for motion and keep the implementation's real inputs. A scripted, canvas or otherwise unsupported component is a blocker to report, not permission to substitute a raster or omit it.
 

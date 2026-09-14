@@ -471,3 +471,21 @@ fn verify_requires_native_approval_and_current_manifest_and_dependencies() {
     fs::write(f.project.join("shared.css"), b"changed after approval").unwrap();
     assert!(super::verify::approved(&f.store,&f.project,"review.json").unwrap_err().contains("changed"));
 }
+
+#[test]
+fn measured_inventory_is_bound_without_repeated_author_dependencies() {
+    let f = Fixture::new();
+    fs::create_dir_all(f.project.join(".impeccable/build")).unwrap();
+    let path = f.project.join(".impeccable/build/spec.json");
+    fs::write(&path, br#"{"regions":[{"id":"art","kind":"plate"},{"id":"control","kind":"control"}]}"#).unwrap();
+    let mut input = f.manifest(); input["stage"] = json!("components");
+    let dir = store::prepare(&f.store, &f.project, &input).unwrap();
+    let state = store::read(&dir.join("current.json")).unwrap();
+    assert!(state["sources"][".impeccable/build/spec.json"].is_string());
+    let mut missing = input.clone(); missing["components"].as_array_mut().unwrap().pop();
+    assert!(store::prepare(&f.store, &f.project, &missing).unwrap_err().contains("omitted measured region"));
+    let mut flattened = input; flattened["components"][1]["preview"] = json!({"kind":"image","path":"art.png"});
+    assert!(store::prepare(&f.store, &f.project, &flattened).unwrap_err().contains("rendered code preview"));
+    fs::write(path, br#"{"regions":[]}"#).unwrap();
+    assert!(store::sources_current(&state).is_err());
+}
