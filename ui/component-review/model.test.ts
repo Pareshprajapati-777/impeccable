@@ -60,3 +60,15 @@ test('review progression skips decisions, wraps, and revisits stale components',
   expect(nextUnreviewed(packet,draft,second.id)).toBe(first.id);
   expect(nextUnreviewed({...packet,components:[]},draft)).toBeUndefined();
 });
+
+test('reviewed queue includes feedback, pending queue includes stale decisions', async () => {
+  const { inReviewQueue } = await import('./model');
+  const draft=approveRemaining(packet,newDraft(packet));
+  draft.decisions.art.action='revise';
+  expect(packet.components.filter(c=>inReviewQueue(c,draft,'pending'))).toHaveLength(0);
+  expect(packet.components.filter(c=>inReviewQueue(c,draft,'reviewed'))).toHaveLength(2);
+  expect(summarize(packet,draft).pending).toBe(0);
+  draft.decisions.art.revision='old';
+  expect(packet.components.filter(c=>inReviewQueue(c,draft,'pending')).map(c=>c.id)).toEqual(['art']);
+  expect(packet.components.filter(c=>inReviewQueue(c,draft,'reviewed')).map(c=>c.id)).toEqual(['control']);
+});

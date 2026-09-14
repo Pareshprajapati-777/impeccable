@@ -90,3 +90,9 @@ export function nextUnreviewed(packet: ReviewPacket, draft: Draft, after?: strin
     if (componentState(component, draft).kind === 'pending') return component.id;
   }
 }
+
+export type InventoryFilter = 'pending' | 'reviewed' | 'all';
+/** Repair requests are completed review decisions, not work left for the reviewer. */
+export function inReviewQueue(component: Component, draft: Draft, filter: InventoryFilter) {
+  return filter === 'all' || (componentState(component, draft).kind === 'pending') === (filter === 'pending');
+}
