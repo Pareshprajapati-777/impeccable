@@ -226,8 +226,9 @@ pub fn collect_visual_contrast_candidates_with_ignores(
     let body = dom.body();
     let root = dom.document_element();
     let mut candidates: Vec<Value> = Vec::new();
+    let mut reportable_count = 0usize;
     for el in dom.query_all(None, "*").unwrap_or_default() {
-        if (candidates.len() as f64) >= max_candidates {
+        if (reportable_count as f64) >= max_candidates {
             break;
         }
         if closest_or_none(dom, el, OVERLAY_SELECTOR).is_some() {
@@ -310,7 +311,14 @@ pub fn collect_visual_contrast_candidates_with_ignores(
         if let Some(selector) = impeccable_foundation::selector_ignores::waiving_selector(
             ignores, "low-contrast", |selector| matches!(dom.closest(el, selector), Ok(Some(_))),
         ) {
+            // Retain a bounded waived sample for suppression tallies without
+            // spending the budget reserved for reportable candidates.
+            if ((candidates.len() - reportable_count) as f64) >= max_candidates {
+                continue;
+            }
             m.insert("ignoredBy".into(), Value::String(selector.to_string()));
+        } else {
+            reportable_count += 1;
         }
         m.insert("tagName".into(), Value::String(tag));
         m.insert("text".into(), Value::String(text));
@@ -1082,7 +1090,7 @@ mod tests {
     fn candidate_waivers_use_the_element_not_its_non_unique_display_selector() {
         let mut dom = FakeDom::new();
         let (_, body) = dom.with_page();
-        for waived in [true, false] {
+        for waived in [true, true, false] {
             let host = dom.add(Some(body), "section");
             dom.set_rect(host, 0.0, 0.0, 400.0, 300.0);
             if waived {
@@ -1099,9 +1107,10 @@ mod tests {
             dom.set_styles(el, &[("color", "rgb(120, 120, 120)"), ("textShadow", "1px 1px black")]);
         }
         let candidates = collect_visual_contrast_candidates(&dom, &json!({
+            "maxCandidates": 1,
             "ignoreSelectors": [{ "rule": "low-contrast", "selector": ".Waived" }]
         }));
-        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates.len(), 2, "one waived sample plus the reserved reportable slot");
         assert_eq!(candidates[0]["selector"], candidates[1]["selector"]);
         assert_eq!(candidates[0]["ignoredBy"], ".Waived");
         assert!(candidates[1].get("ignoredBy").is_none());

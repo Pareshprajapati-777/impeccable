@@ -42,6 +42,23 @@ fn undersized(findings: &[Finding]) -> Vec<&Finding> {
 }
 
 #[test]
+fn pattern_waivers_combine_attribute_and_config_coverage() {
+    let html = r#"<html><head><style>.title { background: linear-gradient(90deg, #f00, #00f); -webkit-background-clip: text; color: transparent; }</style></head><body>
+<h1 class="title Waived">One</h1><h2 class="title" data-impeccable-ignore="gradient-text">Two</h2>
+</body></html>"#;
+    let entries = [SelectorIgnore::new("gradient-text", ".Waived")];
+    let findings = scan(html, &entries);
+    let hits: Vec<_> = findings.iter().filter(|f| f.antipattern == "gradient-text").collect();
+    assert_eq!(hits.len(), 2, "one element finding and one stylesheet pattern");
+    assert!(hits.iter().all(|f| ignored_by(f) == Some(".Waived")));
+    let uncovered = scan(&html.replace("data-impeccable-ignore=\"gradient-text\"", ""), &entries);
+    let hits: Vec<_> = uncovered.iter().filter(|f| f.antipattern == "gradient-text").collect();
+    assert_eq!(hits.len(), 3, "two elements and one stylesheet pattern");
+    assert_eq!(hits.iter().filter(|f| ignored_by(f).is_none()).count(), 2,
+        "the uncovered element and shared pattern remain reportable");
+}
+
+#[test]
 fn one_entry_covers_every_instance_of_the_component() {
     let before = scan(PAGE, &[]);
     let hits = undersized(&before);

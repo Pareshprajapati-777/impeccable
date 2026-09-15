@@ -763,6 +763,10 @@ pub fn selector_nodes_for_live_dom(dom: &dyn Dom, selector: &str) -> Option<Vec<
 /// pulsing-dot hero promotion. Returns `{ type, detail, severity? }`; the
 /// caller applies `_ruleOk`.
 pub fn scoped_html_pattern_findings(dom: &dyn Dom) -> Vec<BrowserFinding> {
+    scoped_html_pattern_findings_with_ignores(dom, &[])
+}
+
+fn scoped_html_pattern_findings_with_ignores(dom: &dyn Dom, ignores: &[SelectorIgnore]) -> Vec<BrowserFinding> {
     let html = dom.document_html_for_patterns();
     // Linked stylesheets are absent from the page's outerHTML, so the probe
     // hands their readable, live-resolving rules to the style corpus (#709).
@@ -775,6 +779,7 @@ pub fn scoped_html_pattern_findings(dom: &dyn Dom) -> Vec<BrowserFinding> {
     let all = crate::checks::html_patterns::check_html_patterns(&html, Some(&corpora));
     let mut out = Vec::new();
     for f in all {
+        let mut pattern_waived = None;
         if let Some(selector) = f.selector.as_deref().filter(|s| !s.is_empty()) {
             let Some(matches) = selector_nodes_for_live_dom(dom, selector) else {
                 continue;
@@ -782,11 +787,21 @@ pub fn scoped_html_pattern_findings(dom: &dyn Dom) -> Vec<BrowserFinding> {
             if matches.is_empty() {
                 continue;
             }
-            if !matches.iter().any(|el| !scoped_ignore_active(dom, *el, &f.id)) {
+            let active: Vec<_> = matches.into_iter().filter(|el| !scoped_ignore_active(dom, *el, &f.id)).collect();
+            if active.is_empty() {
                 continue;
+            }
+            // One CSS finding can cover many elements. Keep it reportable
+            // unless every match not already attribute-waived is covered.
+            for el in active {
+                match waiving_selector(ignores, &f.id, |sel| matches!(dom.closest(el, sel), Ok(Some(_)))) {
+                    Some(sel) => { pattern_waived = pattern_waived.or(Some(sel.to_string())); }
+                    None => { pattern_waived = None; break; }
+                }
             }
         }
         let mut item = BrowserFinding::new(f.id.clone(), f.snippet.clone());
+        item.ignored_by = pattern_waived;
         if let Some(sev) = f.severity.as_ref().filter(|s| !s.is_empty()) {
             item.severity = Some(sev.clone());
         } else if f.id == "pulsing-dot" {
@@ -1475,7 +1490,7 @@ pub fn collect_browser_findings(dom: &dyn Dom, config: &BrowserConfig) -> Collec
 
     page_pass(&mut groups, &mut page_level, q::check_page_quality_dom(dom));
     page_pass(&mut groups, &mut page_level, hits(pc::check_cream_palette(dom)));
-    page_pass(&mut groups, &mut page_level, scoped_html_pattern_findings(dom));
+    page_pass(&mut groups, &mut page_level, scoped_html_pattern_findings_with_ignores(dom, &config.ignore_selectors));
 
     // Rule-pack page rules run after every built-in page pass, through the
     // same attribution as the built-in checks that name their own element.
@@ -1915,6 +1930,30 @@ mod tests {
         assert!(visual_contrast_result_finding(&d, p, &existing, &result).is_none());
         let pass = json!({ "status": "pass", "selector": "#t", "finding": null });
         assert_eq!(visual_contrast_result_el(&d, &pass), None);
+    }
+
+    #[test]
+    fn pattern_selector_ignores_cover_matches_not_the_body() {
+        let mut d = FakeDom::new();
+        let (_, body) = d.with_page();
+        d.html_for_patterns = "<style>.title { background: linear-gradient(90deg, #f00, #00f); -webkit-background-clip: text; color: transparent; }</style>".into();
+        let a = d.add(Some(body), "h1");
+        let b = d.add(Some(body), "h2");
+        for el in [a, b] { d.add_selector(el, ".title"); }
+        d.add_selector(a, ".Waived");
+        let cfg = BrowserConfig {
+            ignore_selectors: vec![SelectorIgnore::new("gradient-text", ".Waived")],
+            ..BrowserConfig::default()
+        };
+        let stamp = |d: &FakeDom| {
+            collect_browser_findings(d, &cfg).groups.into_iter().flat_map(|g| g.findings)
+                .find(|f| f.type_ == "gradient-text").expect("pattern finding").ignored_by
+        };
+        assert_eq!(stamp(&d), None, "one uncovered match keeps the finding");
+        d.set_attr(b, "data-impeccable-ignore", "gradient-text");
+        assert_eq!(stamp(&d).as_deref(), Some(".Waived"), "attribute and config coverage combine");
+        d.add_selector(b, ".Waived");
+        assert_eq!(stamp(&d).as_deref(), Some(".Waived"));
     }
 
     #[test]

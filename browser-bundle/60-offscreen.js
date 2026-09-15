@@ -155,7 +155,7 @@
     await ask(session, {
       stage: 'findings',
       groups,
-      pageLevel: collected.pageLevel,
+      pageLevel: collected.pageLevel.filter(f => !f.ignoredBy),
       serialized: serialize(wasm, groups),
       stats,
     });

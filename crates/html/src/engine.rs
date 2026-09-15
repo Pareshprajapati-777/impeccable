@@ -349,7 +349,7 @@ pub fn detect_html_source(
                     // all-or-nothing rule the attribute pass above applies.
                     if !matches.is_empty() {
                         let mut covering: Option<&str> = None;
-                        for el in &matches {
+                        for el in matches.iter().filter(|el| !scoped_ignore_active(el, &f.id)) {
                             match waiving_selector(options.ignore_selectors, &f.id, |sel| {
                                 el.closest(sel).is_some()
                             }) {

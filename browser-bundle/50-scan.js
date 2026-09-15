@@ -135,7 +135,7 @@ if (IS_BROWSER && !__impeccable) {
     return {
       groupMap,
       allFindings: browserFindingsFromMap(groupMap),
-      pageLevelFindings: collected.pageLevel,
+      pageLevelFindings: collected.pageLevel.filter(f => !f.ignoredBy),
     };
   }
 
@@ -473,7 +473,7 @@ if (IS_BROWSER && !__impeccable) {
     __impeccable.snapshot_clear();
     return {
       findings: serialized,
-      pageLevel: out.pageLevel,
+      pageLevel: out.pageLevel.filter(f => !f.ignoredBy),
       stats: { ...cap.stats, rounds, unknownStyleProps, captureMs: t1 - t0, coreMs: performance.now() - t1 },
     };
   };
