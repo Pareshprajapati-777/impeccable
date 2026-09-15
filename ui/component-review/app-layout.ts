@@ -42,7 +42,6 @@ export const appLayout = `
 .review .label-icon{display:inline-flex;align-items:center;justify-content:center;gap:7px}
 .review .tray-actions .utility-icon{width:18px;height:18px;stroke-width:1.6}
 .material{align-items:center;margin-bottom:10px}
-.preview-round{justify-content:flex-end;margin-bottom:10px}
 .compare-toolbar{margin-bottom:10px}
 .view-controls{min-height:0}.view-controls>.background-options{margin-left:auto;gap:2px}.view-controls .swatch-button{display:flex;align-items:center;justify-content:center;min-width:32px;height:32px;padding:5px}
 .background-swatch{display:block;width:20px;height:20px;border:1px solid #9ba99d;border-radius:2px;pointer-events:none}.background-swatch.checker{background-size:8px 8px}.page-swatch{background:var(--comp-background,#eee)}
