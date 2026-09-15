@@ -460,6 +460,40 @@ fn check_accepts_current_copilot_user_agents_in_home_rooted_checkout() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+#[test]
+fn check_ignores_stale_legacy_pi_skills_when_the_user_install_is_current() {
+    let root = temp_root("pi-check-home-scope");
+    let home = format!("{root}/home");
+    let tmpdir = format!("{root}/tmp");
+    for d in [&home, &tmpdir] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let bundle_root = create_fake_universal_bundle(&root, &[".pi"]);
+    let env = base_env(&home, &tmpdir, &bundle_root);
+
+    let r = run_cli(
+        &["install", "-y", "--scope=global", "--no-hooks", "--providers=pi"],
+        &home,
+        &env,
+    );
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+
+    let canonical = format!("{home}/.pi/agent/skills/impeccable");
+    let legacy = format!("{home}/.pi/skills/impeccable");
+    std::fs::create_dir_all(format!("{home}/.pi/skills")).unwrap();
+    std::fs::create_dir_all(&legacy).unwrap();
+    write(&format!("{legacy}/SKILL.md"), "---\nname: impeccable\nversion: 1.0.0-stale\n---\n");
+    assert!(std::path::Path::new(&canonical).exists());
+
+    let update = run_cli(&["update", "--global", "-y", "--no-hooks"], &home, &env);
+    assert!(update.stdout.contains("Skills are up to date"), "{}\n{}", update.stdout, update.stderr);
+
+    let check = run_cli(&["check"], &home, &env);
+    assert!(check.stdout.contains("Skills are up to date"), "{}\n{}", check.stdout, check.stderr);
+    assert!(!check.stdout.contains("Updates available"), "{}", check.stdout);
+    std::fs::remove_dir_all(&root).ok();
+}
+
 // ─── inferred agent update scope (d2a9efb9) ──────────────────────────────────
 
 #[test]
