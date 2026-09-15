@@ -1396,6 +1396,12 @@ impl<'a> Page<'a> {
         }
     }
 
+    /// Preserve transparency when capturing isolated component paint.
+    pub fn set_transparent_background(&mut self) -> CdpResult<()> {
+        self.send("Emulation.setDefaultBackgroundColorOverride", json!({"color":{"r":0,"g":0,"b":0,"a":0}}))?;
+        Ok(())
+    }
+
     /// Capture the current viewport without Chromium's beyond-viewport resize.
     /// Use for observations that must not trigger responsive source selection.
     pub fn screenshot_viewport(&mut self) -> CdpResult<String> {

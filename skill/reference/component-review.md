@@ -10,7 +10,7 @@ Write `.impeccable/review/components.json` with this manifest format:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "components",
   "title": "Component review",
   "stage": "components",
@@ -31,14 +31,18 @@ Write `.impeccable/review/components.json` with this manifest format:
       "medium": "html",
       "box": {"x": 0.05, "y": 0.2, "w": 0.4, "h": 0.25},
       "note": "Rendered semantic heading and its typography.",
-      "preview": {"kind": "page", "path": ".impeccable/review/components/headline.html"},
+      "preview": {"kind": "page", "path": ".impeccable/review/components/kit.html", "selector": "#headline"},
       "dependencies": [".impeccable/build/spec.json", "assets/type.woff2"]
     }
   ]
 }
 ```
 
-The coordinates above only illustrate the schema. Use the approved comp's actual pixel dimensions and each measured region's normalized bounds (`x / width`, `y / height`, `w / width`, `h / height`). A code preview is rendered at the comp viewport and cropped to that component's box, so place its content at those coordinates in the review document. Include every file the document uses in `dependencies`, including linked CSS, fonts and images. The runtime also binds the measured spec for the component stage and checks its inventory. Local paths only. Static PNG, WebP and JPEG previews retain their original bytes and actual transparency; never draw a checkerboard into the asset.
+The coordinates above only illustrate the schema. Use the approved comp's actual pixel dimensions and each measured region's normalized bounds (`x / width`, `y / height`, `w / width`, `h / height`). Each code preview requires a `selector` matching exactly one component element inside the document body. Shared kit documents are supported: the native capturer preserves layout and authored styles, hides other components, and crops to the measured box. A separately targeted child is excluded from its parent's isolated preview. Background fields therefore show their own paint, not the text and controls laid over them. Place components at the comp coordinates in the review document.
+
+For a raster placed inside the kit, add `context: {"kind":"page","path":".impeccable/review/components/kit.html","selector":"#illustration"}` and declare that document's dependencies. This identifies its DOM placement so a containing code component excludes it too; the raster preview remains the original image bytes.
+
+The runtime also captures an unmodified **In context** view from that same document. This assembled view is reference only, not another component to approve. Keep each review target independently meaningful; use context to show a group together rather than submitting the same content for approval as both a combined component and its children. The final assembled hero still has its own review checkpoint. Include every file the document uses in `dependencies`, including linked CSS, fonts and images. The runtime also binds the measured spec for the component stage and checks its inventory. Local paths only. Static PNG, WebP and JPEG previews retain their original bytes and actual transparency; never draw a checkerboard into the asset.
 
 Native capture supports stable HTML/CSS and inline SVG. Supply a static review state for motion and keep the implementation's real inputs. A scripted, canvas or otherwise unsupported component is a blocker to report, not permission to substitute a raster or omit it.
 
@@ -48,7 +52,7 @@ If the harness exposes `component_review`, call it with `manifest_path` set to `
 
 Otherwise run `{{scripts_path}}/impeccable component-review capture --manifest .impeccable/review/components.json`, then start `{{scripts_path}}/impeccable component-review serve --session <returned session>` in the background. Open the URL it prints in the available browser and wait for the user. Read the result with `{{scripts_path}}/impeccable component-review verify --manifest .impeccable/review/components.json`; pending, needs-work and stale input all refuse approval. Never submit the page or write a receipt on the user's behalf.
 
-The user can approve components, request changes, and mark missing regions. Act on their feedback without replacing it with your own favorable verdict. Keep component IDs stable, update the actual implementation and dependency list, and present another round. The UI carries only approvals whose component inputs have not changed. Do not ask the user to reapprove unchanged work. Continue only when the inventory is confirmed and all components are approved.
+The user can approve components, request changes, and mark missing regions. Act on their feedback without replacing it with your own favorable verdict. Keep component IDs stable, update the actual implementation and dependency list, and present another round. The UI carries only approvals whose component inputs have not changed. Selector ownership is an input too; changing a target invalidates affected captures. Do not ask the user to reapprove unchanged work. Continue only when the inventory is confirmed and all components are approved.
 
 ## Assemble and review
 

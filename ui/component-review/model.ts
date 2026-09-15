@@ -4,10 +4,10 @@ export type Component = {
   material?: { format: string; width: number; height: number; alpha: 'transparent' | 'opaque' | 'unknown' };
   context?: { kind?: 'image' | 'page'; sourceKind?: 'page'; url: string; layering: string };
   thumbnail?: { url: string; box?: Box };
-  preview: { kind: 'image' | 'page'; sourceKind?: 'page'; url: string; position?: string };
+  preview: { kind: 'image' | 'page'; sourceKind?: 'page'; isolation?: { method: 'dom-component-v1'; selector: string; excludedComponents: string[] }; url: string; position?: string };
 };
 export type ReviewPacket = {
-  id: string; revision: string; title: string; round: number;
+  id: string; revision: string; title: string; round: number; stage?: 'components' | 'hero';
   comp: { url: string; width: number; height: number; background?: string }; components: Component[];
 };
 export type Decision = { revision: string; action: 'approve' | 'revise'; feedback: string; split: boolean };
@@ -76,7 +76,7 @@ export function componentPresentation(component: Component) {
   return {
     code, captured,
     label: code ? (component.medium.match(/html|css|svg/i) ? component.medium : 'HTML / CSS / SVG') : 'Raster',
-    caption: code ? (captured ? 'Rendered component' : 'Live component') : 'Produced asset',
+    caption: code ? (captured ? component.preview.isolation ? 'Component only' : 'Region capture' : 'Live component') : 'Produced asset',
     fileLabel: captured ? 'Open captured preview' : 'Open source image',
   };
 }

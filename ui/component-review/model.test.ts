@@ -42,7 +42,7 @@ test('captured code keeps its implementation identity without trusting medium as
   const image = packet.components[0];
   expect(componentPresentation({...image, medium:'SVG'}).code).toBe(false);
   const captured = {...packet.components[1], preview:{kind:'image' as const, sourceKind:'page' as const, url:'/capture.png'}};
-  expect(componentPresentation(captured)).toMatchObject({code:true,captured:true,label:'HTML',caption:'Rendered component',fileLabel:'Open captured preview'});
+  expect(componentPresentation(captured)).toMatchObject({code:true,captured:true,label:'HTML',caption:'Region capture',fileLabel:'Open captured preview'});
   expect(componentPresentation(packet.components[1]).caption).toBe('Live component');
 });
 

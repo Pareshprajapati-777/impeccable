@@ -85,8 +85,11 @@ fn view(
 pub fn freeze(project: &Path, input: &Value) -> Result<(Value, BTreeMap<String, Vec<u8>>), String> {
     let canonical = project.canonicalize().map_err(|e| e.to_string())?;
     let project = canonical.as_path();
-    if input["schemaVersion"] != 1 {
-        return Err("manifest schemaVersion must be 1".into());
+    if !matches!(input["schemaVersion"].as_u64(), Some(1 | 2)) {
+        return Err("manifest schemaVersion must be 1 or 2".into());
+    }
+    if input["schemaVersion"] == 2 && !matches!(input["stage"].as_str(), Some("components" | "hero")) {
+        return Err("schemaVersion 2 requires stage components or hero".into());
     }
     let mut packet = input.clone();
     for key in ["capture", "captureVerified"] {
@@ -126,6 +129,24 @@ pub fn freeze(project: &Path, input: &Value) -> Result<(Value, BTreeMap<String, 
     }
 
     view(&mut packet["comp"], project, &mut files, &mut comp_files)?;
+    // Selector ownership is part of each shared document's input contract. A peer
+    // target changing must invalidate captures that previously excluded it.
+    let mut targets: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    if input["schemaVersion"] == 2 && input["stage"] == "components" {
+        for c in input["components"].as_array().ok_or("components must be an array")? {
+            if c["preview"]["kind"] != "page" && c["preview"].get("selector").is_some() {
+                return Err("only code previews can declare a selector; place raster DOM targets in context".into());
+            }
+            let target = if c["preview"]["kind"] == "page" { Some(&c["preview"]) }
+                else if c["context"]["kind"] == "page" { Some(&c["context"]) } else { None };
+            if let Some(target) = target {
+                let selector = string(target, "selector")?;
+                if selector.len() > 1024 { return Err("component selector too long".into()); }
+                let path = string(target, "path")?;
+                targets.entry(path.into()).or_default().push(json!({"id":c["id"],"selector":selector}));
+            }
+        }
+    }
     let mut ids = BTreeSet::new();
     let components = packet["components"]
         .as_array_mut()
@@ -143,6 +164,7 @@ pub fn freeze(project: &Path, input: &Value) -> Result<(Value, BTreeMap<String, 
             if let Some(view) = c.get_mut(key).and_then(Value::as_object_mut) {
                 view.remove("sourceKind");
                 view.remove("capture");
+                view.remove("isolation");
             }
         }
         let id = string(c, "id")?.to_string();
@@ -196,9 +218,13 @@ pub fn freeze(project: &Path, input: &Value) -> Result<(Value, BTreeMap<String, 
             }
         }
         c.as_object_mut().unwrap().remove("revision");
-        c["revision"] = json!(digest(
-            &serde_json::to_vec(&json!({"component":c,"files":used})).unwrap()
-        ));
+        let mut identity = json!({"component":c,"files":used});
+        let target_path = if c["preview"]["kind"] == "page" { Some(preview_path.as_str()) }
+            else { c["context"]["url"].as_str().and_then(|url| url.strip_prefix("/files/")) };
+        if let Some(peers) = target_path.and_then(|path| targets.get(path)) {
+            identity["targets"] = json!(peers);
+        }
+        c["revision"] = json!(digest(&serde_json::to_vec(&identity).unwrap()));
     }
     let total: usize = files.values().map(Vec::len).sum();
     if total > 256 * 1024 * 1024 {

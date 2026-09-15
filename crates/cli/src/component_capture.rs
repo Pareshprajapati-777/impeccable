@@ -60,6 +60,7 @@ fn render_page(
     width: u32,
     height: u32,
     box_: &Value,
+    isolation: Option<&Value>,
 ) -> Result<(Vec<u8>, Value), String> {
     let server = snapshot.serve()?;
     let url = server.entry_url();
@@ -80,6 +81,12 @@ fn render_page(
           if(document.getAnimations().some(a=>a.playState==='running'))throw Error('Component is animated; provide its static review state.');
           return {html:document.documentElement.outerHTML,svg:document.querySelectorAll('svg').length,images:document.images.length,controls:document.querySelectorAll('button,input,select,textarea,a[href]').length};
         })()"#).map_err(|e|e.message)?;
+        let isolated = if let Some(targets) = isolation {
+            page.set_transparent_background().map_err(|e| e.message)?;
+            let script = format!("({})({})", include_str!("component_isolation.js"), targets);
+            Some(page.evaluate_value_in_world(&world, &script).map_err(|e| e.message)?)
+        } else { None };
+        let captured_dom = page.evaluate_value_in_world(&world, "document.documentElement.outerHTML").map_err(|e| e.message)?;
         let coords = ["x", "y", "w", "h"].map(|k| box_[k].as_f64().unwrap());
         let clip = [
             coords[0] * width as f64,
@@ -87,6 +94,13 @@ fn render_page(
             coords[2] * width as f64,
             coords[3] * height as f64,
         ];
+        if let Some(isolated) = &isolated {
+            let b = &isolated["bounds"];
+            let (x, y, w, h) = (b["x"].as_f64().unwrap(), b["y"].as_f64().unwrap(), b["width"].as_f64().unwrap(), b["height"].as_f64().unwrap());
+            if x >= clip[0] + clip[2] || y >= clip[1] + clip[3] || x + w <= clip[0] || y + h <= clip[1] {
+                return Err("component target does not intersect its measured box".into());
+            }
+        }
         let first = page
             .screenshot_viewport()
             .map_err(|e| e.message)?;
@@ -144,14 +158,18 @@ fn render_page(
         let unchanged = page
             .evaluate_value_in_world(&world, "document.documentElement.outerHTML")
             .map_err(|e| e.message)?;
-        if unchanged != dom["html"] {
+        if unchanged != captured_dom {
             return Err("component document changed during capture".into());
         }
         let viewport_png = base64::engine::general_purpose::STANDARD
             .decode(first)
             .map_err(|e| e.to_string())?;
         let png = crop_viewport(&viewport_png, width, height, clip)?;
-        let proof = json!({"kind":"static-code","entry":snapshot.entry(),"inputSnapshot":snapshot.digest(),"inputs":snapshot.manifest(),"observedDependencies":responses,"domSha256":hash(dom["html"].as_str().unwrap().as_bytes()),"screenshotSha256":hash(&png),"viewportScreenshotSha256":hash(&viewport_png),"cropMethod":"verified-viewport-pixels","viewport":{"width":width,"height":height,"dpr":1},"box":box_,"reducedMotion":true,"svgElements":dom["svg"],"rasterElements":dom["images"],"semanticControls":dom["controls"]});
+        let mut proof = json!({"kind":"static-code","entry":snapshot.entry(),"inputSnapshot":snapshot.digest(),"inputs":snapshot.manifest(),"observedDependencies":responses,"domSha256":hash(dom["html"].as_str().unwrap().as_bytes()),"screenshotSha256":hash(&png),"viewportScreenshotSha256":hash(&viewport_png),"cropMethod":"verified-viewport-pixels","viewport":{"width":width,"height":height,"dpr":1},"box":box_,"reducedMotion":true,"svgElements":dom["svg"],"rasterElements":dom["images"],"semanticControls":dom["controls"]});
+        if let Some(isolated) = isolated {
+            proof["isolation"] = isolated;
+            proof["capturedDomSha256"] = json!(hash(captured_dom.as_str().unwrap().as_bytes()));
+        }
         Ok((png, proof))
     })();
     page.close();
@@ -163,6 +181,20 @@ impl ComponentCapturer for NativeComponentCapturer {
         packet: &mut Value,
         inputs: &BTreeMap<String, Vec<u8>>,
     ) -> Result<CapturedPreviews, String> {
+        let isolated = packet["schemaVersion"] == 2 && packet["stage"] == "components";
+        if packet["stage"] == "components" && !isolated {
+            return Err("New component captures require schemaVersion 2 with preview.selector for each code component. Existing review records remain readable.".into());
+        }
+        let mut targets: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+        if isolated {
+            for c in packet["components"].as_array().ok_or("missing components")? {
+                let target = if c["preview"]["kind"] == "page" { Some(&c["preview"]) }
+                    else if c["context"]["kind"] == "page" { Some(&c["context"]) } else { None };
+                if let Some(target) = target {
+                    targets.entry(source(target)?.into()).or_default().push(json!({"id":c["id"],"selector":target["selector"]}));
+                }
+            }
+        }
         let width = packet["comp"]["width"]
             .as_u64()
             .ok_or("missing comp width")? as u32;
@@ -195,6 +227,13 @@ impl ComponentCapturer for NativeComponentCapturer {
             {
                 let id = c["id"].as_str().ok_or("missing component id")?.to_string();
                 let mut views = serde_json::Map::new();
+                // Context comes from the same frozen document, not a separately
+                // authored approximation. It is never a second approval item.
+                if isolated && c["preview"]["kind"] == "page" {
+                    c["context"] = c["preview"].clone();
+                    c["context"].as_object_mut().unwrap().remove("selector");
+                    c["context"]["layering"] = json!("Context only. This decision applies to the isolated component; the assembled page is reviewed separately.");
+                }
                 for key in ["preview", "context"] {
                     if c.get(key).is_none() {
                         continue;
@@ -223,12 +262,15 @@ impl ComponentCapturer for NativeComponentCapturer {
                         );
                     }
                     let snapshot = Arc::new(HtmlSnapshot::from_pinned(path.clone(), selected)?);
-                    let cache_key = format!("{}:{}", snapshot.digest(), c["box"]);
+                    let isolation = if isolated && key == "preview" {
+                        Some(json!({"id":id,"targets":targets.get(&path).ok_or("missing component targets")?}))
+                    } else { None };
+                    let cache_key = format!("{}:{}:{}", snapshot.digest(), c["box"], isolation.as_ref().unwrap_or(&Value::Null));
                     let (png, proof) = if let Some(saved) = cache.get(&cache_key) {
                         saved.clone()
                     } else {
                         let captured =
-                            render_page(&mut browser, snapshot, width, height, &c["box"])
+                            render_page(&mut browser, snapshot, width, height, &c["box"], isolation.as_ref())
                                 .map_err(|e| format!("{id} {key}: {e}"))?;
                         cache.insert(cache_key, captured.clone());
                         captured
@@ -237,6 +279,9 @@ impl ComponentCapturer for NativeComponentCapturer {
                     c[key]["url"] = json!(format!("/files/{output}"));
                     c[key]["kind"] = json!("image");
                     c[key]["sourceKind"] = json!("page");
+                    if let Some(isolation) = proof.get("isolation") {
+                        c[key]["isolation"] = isolation.clone();
+                    }
                     if key == "preview" {
                         c["material"] = material(&png, "Captured HTML / CSS / SVG")?;
                     }
@@ -260,6 +305,50 @@ impl ComponentCapturer for NativeComponentCapturer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Real browser regression: shared-document crops used to duplicate the
+    // headline in its background card. Run explicitly on a browser-equipped host.
+    #[test]
+    #[ignore = "requires Chromium"]
+    fn isolated_component_capture_keeps_layout_excludes_children_and_preserves_context() {
+        let comp = impeccable_comp::raster::Image { width:100,height:100,data:vec![255;100*100*4] };
+        let reference = impeccable_comp::png_io::encode_png(&comp,&[]).unwrap();
+        let html = br#"<!doctype html><style>
+          html,body{margin:0;background:purple} #surface{position:absolute;inset:0;background:yellow}
+          #headline{position:absolute;left:10px;top:10px;width:40px;height:40px;background:red}
+          #headline::before{content:'';position:absolute;left:0;top:0;width:5px;height:5px;background:cyan;visibility:visible}
+          #headline::after{content:'';position:absolute;left:5px;top:0;width:5px;height:5px;background:black;visibility:hidden}
+          #child{position:absolute;left:10px;top:10px;width:10px;height:10px;background:lime}
+          #sibling{position:absolute;left:70px;top:70px;width:10px;height:10px;background:blue}
+        </style><div id="surface"><div id="headline"><span id="child"></span></div></div><div id="sibling"></div>"#;
+        let inputs = BTreeMap::from([("comp.png".into(),reference),("kit.html".into(),html.to_vec())]);
+        let make = |id:&str| json!({"id":id,"box":{"x":0,"y":0,"w":1,"h":1},"preview":{"kind":"page","url":"/files/kit.html","selector":format!("#{id}")},"dependencies":[]});
+        let mut packet = json!({"schemaVersion":2,"stage":"components","comp":{"url":"/files/comp.png","width":100,"height":100},"components":[make("surface"),make("headline"),make("child"),make("sibling")]});
+        let captured = NativeComponentCapturer.capture(&mut packet,&inputs).unwrap();
+        let pixels = |index:usize,view:&str,x:usize,y:usize| {
+            let path=packet["components"][index][view]["url"].as_str().unwrap().strip_prefix("/files/").unwrap();
+            let image=impeccable_comp::png_io::decode_png(&captured.files[path]).unwrap().image;
+            image.data[(y*100+x)*4..(y*100+x)*4+4].to_vec()
+        };
+        assert_eq!(pixels(0,"preview",12,12),[255,255,0,255]); // no foreground/pseudo
+        assert_eq!(pixels(0,"context",12,12),[0,255,255,255]); // real combined context
+        assert_eq!(pixels(1,"preview",16,12),[255,0,0,255]); // hidden pseudo stays hidden
+        assert_eq!(pixels(1,"preview",22,22),[255,0,0,255]); // independently owned child absent
+        assert_eq!(pixels(1,"preview",75,75)[3],0); // sibling and page canvas absent
+        assert_eq!(pixels(2,"preview",22,22),[0,255,0,255]);
+        assert_eq!(pixels(2,"preview",12,12)[3],0); // parent's paint absent
+        assert_eq!(packet["components"][1]["preview"]["isolation"]["excludedComponents"],json!(["child"]));
+        assert_eq!(packet["components"][1]["material"]["alpha"],"transparent");
+        let mut raster_child = json!({"schemaVersion":2,"stage":"components","comp":{"url":"/files/comp.png","width":100,"height":100},"components":[make("headline"),make("child")]});
+        raster_child["components"][1]["preview"] = json!({"kind":"image","url":"/files/comp.png"});
+        raster_child["components"][1]["context"] = json!({"kind":"page","url":"/files/kit.html","selector":"#child"});
+        NativeComponentCapturer.capture(&mut raster_child,&inputs).unwrap();
+        assert_eq!(raster_child["components"][0]["preview"]["isolation"]["excludedComponents"],json!(["child"]));
+        for selector in ["body", "#missing", "div", "#surface"] {
+            let mut broken = json!({"schemaVersion":2,"stage":"components","comp":{"url":"/files/comp.png","width":100,"height":100},"components":[make("surface"),make("headline")]});
+            broken["components"][1]["preview"]["selector"]=json!(selector);
+            assert!(NativeComponentCapturer.capture(&mut broken,&inputs).is_err(),"{selector}");
+        }
+    }
     #[test]
     fn component_edge_crops_round_endpoints_on_odd_viewports() {
         let image = impeccable_comp::raster::Image {width:3,height:3,data:(0u8..36).collect()};

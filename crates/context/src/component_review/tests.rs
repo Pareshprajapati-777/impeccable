@@ -489,3 +489,39 @@ fn measured_inventory_is_bound_without_repeated_author_dependencies() {
     fs::write(path, br#"{"regions":[]}"#).unwrap();
     assert!(store::sources_current(&state).is_err());
 }
+
+#[test]
+fn isolated_components_require_targets_and_pin_their_ownership() {
+    let f = Fixture::new();
+    fs::create_dir_all(f.project.join(".impeccable/build")).unwrap();
+    fs::write(f.project.join(".impeccable/build/spec.json"), br#"{"regions":[{"id":"art","kind":"plate"},{"id":"control","kind":"control"}]}"#).unwrap();
+    let mut input = f.manifest();
+    input["schemaVersion"] = json!(2);
+    input["stage"] = json!("components");
+    assert!(manifest::freeze(&f.project, &input).unwrap_err().contains("selector"));
+    input["components"][1]["preview"]["selector"] = json!("button");
+    let (first, _) = manifest::freeze(&f.project, &input).unwrap();
+    input["components"][1]["preview"]["selector"] = json!("#cta");
+    let (changed, _) = manifest::freeze(&f.project, &input).unwrap();
+    assert_ne!(first["components"][1]["revision"], changed["components"][1]["revision"]);
+    assert_eq!(first["components"][0]["revision"], changed["components"][0]["revision"]);
+    input["components"][0]["preview"]["selector"] = json!("#fake-raster-target");
+    assert!(manifest::freeze(&f.project, &input).is_err());
+}
+
+#[test]
+fn shared_target_changes_invalidate_other_isolated_components() {
+    let f = Fixture::new();
+    fs::create_dir_all(f.project.join(".impeccable/build")).unwrap();
+    fs::write(f.project.join(".impeccable/build/spec.json"), br#"{"regions":[{"id":"art","kind":"chrome"},{"id":"control","kind":"control"}]}"#).unwrap();
+    let mut input = f.manifest();
+    input["schemaVersion"] = json!(2); input["stage"] = json!("components");
+    input["components"][0]["preview"] = json!({"kind":"page","path":"control.html","selector":"#background"});
+    input["components"][1]["preview"]["selector"] = json!("button");
+    let (before,_) = manifest::freeze(&f.project,&input).unwrap();
+    input["components"][1]["preview"]["selector"] = json!("#cta");
+    let (after,_) = manifest::freeze(&f.project,&input).unwrap();
+    assert_ne!(before["components"][0]["revision"],after["components"][0]["revision"]);
+    input["stage"] = Value::Null;
+    assert!(manifest::freeze(&f.project,&input).is_err());
+}
