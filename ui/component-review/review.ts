@@ -209,7 +209,14 @@ export function mountComponentReview(host: HTMLElement, packet: ReviewPacket, op
     if (focusId) root.getElementById(focusId)?.focus({preventScroll:true});
     else if(focusSelection) Array.from(root.querySelectorAll<HTMLElement>('.item[data-select]')).find(el=>el.dataset.select===focusSelection)?.focus({preventScroll:true});
     const on = (id:string, action:()=>void) => root.querySelector(`#${id}`)?.addEventListener('click', action);
-    root.querySelectorAll<HTMLElement>('[data-select]').forEach(el => el.onclick = () => {if(marking)return; finished=false; selected=el.dataset.select!; mobilePane='component'; overlay=false; zoom='fit'; outputMode='isolated'; previousRound=false; render();});
+    function selectComponent(id:string, enlarge=false) {
+      if(marking)return;
+      finished=false; selected=id; mobilePane='component'; overlay=false; zoom='fit'; outputMode='isolated'; previousRound=false; render();
+      // Use the newly rendered control so map shortcuts share the toolbar's
+      // animation, focus management, reduced-motion and dismissal behavior.
+      if(enlarge)root.querySelector<HTMLButtonElement>('#expand-comparison')?.click();
+    }
+    root.querySelectorAll<HTMLElement>('[data-select]').forEach(el => el.onclick = () => selectComponent(el.dataset.select!,el.classList.contains('pin')&&packet.components.some(item=>item.id===el.dataset.select)));
     on('previous-round',()=>{previousRound=true;render();});
     on('current-round',()=>{previousRound=false;render();});
     on('review-changes',()=>{const pending=orderedComponents().filter(item=>stateFor(item).kind==='pending');const current=pending.findIndex(item=>item.id===selected);const next=pending[(current+1)%pending.length];if(next){finished=false;selected=next.id;mobilePane='component';inventoryFilter='pending';previousRound=false;zoom='fit';overlay=false;outputMode='isolated';render();}});
@@ -261,7 +268,18 @@ export function mountComponentReview(host: HTMLElement, packet: ReviewPacket, op
     }));
     on('submit',async()=>{if(uncommitted||sending||submitted)return;sending=true;error='';render();try{await options.onSubmit(submission(packet,draft));submitted=true;finished=true;marking=false;inventoryFilter='reviewed';}catch(e){error=e instanceof Error?e.message:'Could not save. Try again.';}finally{sending=false;render();}});
     const map = root.querySelector<HTMLElement>('.map')!;
-    function point(e: PointerEvent) {const r=map.getBoundingClientRect();return {x:Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)),y:Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))};}
+    function point(e: MouseEvent) {const r=map.getBoundingClientRect();return {x:Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)),y:Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))};}
+    function componentAt(e:MouseEvent) {
+      const p=point(e);
+      // Prefer the specific foreground piece over a containing background.
+      return packet.components.filter(({box:b})=>p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h)
+        .sort((a,b)=>a.box.w*a.box.h-b.box.w*b.box.h)[0];
+    }
+    map.addEventListener('click',e=>{
+      if(marking||(e.target as Element).closest('[data-select]'))return;
+      const item=componentAt(e);if(item)selectComponent(item.id,true);
+    });
+    map.addEventListener('pointermove',e=>{if(!marking)map.style.cursor=componentAt(e)?'zoom-in':'';});
     map.addEventListener('pointerdown',e=>{if(!marking)return;drag=point(e);map.setPointerCapture(e.pointerId);e.preventDefault();});
     map.addEventListener('pointermove',e=>{if(!drag)return;const p=point(e);dragBox={x:Math.min(drag.x,p.x),y:Math.min(drag.y,p.y),w:Math.abs(p.x-drag.x),h:Math.abs(p.y-drag.y)};const outline=root.querySelector<HTMLElement>('.draw-box')!;outline.hidden=false;outline.style.cssText=boxStyle(dragBox);});
     map.addEventListener('pointerup',()=>{if(dragBox&&dragBox.w>.01&&dragBox.h>.01)addMissing(dragBox);else{drag=null;dragBox=null;}});
