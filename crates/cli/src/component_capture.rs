@@ -61,8 +61,9 @@ fn render_page(
     height: u32,
     box_: &Value,
     isolation: Option<&Value>,
+    assembled: bool,
 ) -> Result<(Vec<u8>, Value), String> {
-    let server = snapshot.serve()?;
+    let server = if assembled { snapshot.serve_assembled()? } else { snapshot.serve()? };
     let url = server.entry_url();
     let origin = url.split('/').take(3).collect::<Vec<_>>().join("/");
     let mut page = browser.new_page().map_err(|e| e.message)?;
@@ -74,13 +75,14 @@ fn render_page(
         page.goto(&url, "networkidle0", Duration::from_secs(20))
             .map_err(|e| e.message)?;
         let world = page.create_isolated_world().map_err(|e| e.message)?;
-        let dom=page.evaluate_value_in_world(&world,r#"(async()=>{
-          if(document.scripts.length||document.querySelector('iframe,frame,object,embed,canvas'))throw Error('Component capture requires static HTML/CSS/SVG; script, frame and canvas components need a supported capture adapter.');
+        let inspect = r#"(async()=>{
+          if((!ASSEMBLED&&document.scripts.length)||document.querySelector('iframe,frame,object,embed,canvas'))throw Error('Component capture requires static HTML/CSS/SVG; script, frame and canvas components need a supported capture adapter.');
           await Promise.race([(async()=>{await document.fonts.ready;await Promise.all([...document.images].map(i=>i.decode()));})(),new Promise((_,reject)=>setTimeout(()=>reject(Error('component resources did not settle')),5000))]);
           if([...document.fonts].some(f=>f.status==='error'))throw Error('A component font failed to load.');
           if(document.getAnimations().some(a=>a.playState==='running'))throw Error('Component is animated; provide its static review state.');
           return {html:document.documentElement.outerHTML,svg:document.querySelectorAll('svg').length,images:document.images.length,controls:document.querySelectorAll('button,input,select,textarea,a[href]').length};
-        })()"#).map_err(|e|e.message)?;
+        })()"#.replace("ASSEMBLED", if assembled { "true" } else { "false" });
+        let dom=page.evaluate_value_in_world(&world,&inspect).map_err(|e|e.message)?;
         let isolated = if let Some(targets) = isolation {
             page.set_transparent_background().map_err(|e| e.message)?;
             let script = format!("({})({})", include_str!("component_isolation.js"), targets);
@@ -170,6 +172,10 @@ fn render_page(
             proof["isolation"] = isolated;
             proof["capturedDomSha256"] = json!(hash(captured_dom.as_str().unwrap().as_bytes()));
         }
+        if assembled {
+            proof["kind"] = json!("assembled-page");
+            proof["scriptPolicy"] = json!("pinned-local-and-inline; network-api-and-workers-disabled");
+        }
         Ok((png, proof))
     })();
     page.close();
@@ -182,6 +188,7 @@ impl ComponentCapturer for NativeComponentCapturer {
         inputs: &BTreeMap<String, Vec<u8>>,
     ) -> Result<CapturedPreviews, String> {
         let isolated = packet["schemaVersion"] == 2 && packet["stage"] == "components";
+        let assembled = packet["stage"] == "hero";
         if packet["stage"] == "components" && !isolated {
             return Err("New component captures require schemaVersion 2 with preview.selector for each code component. Existing review records remain readable.".into());
         }
@@ -270,7 +277,7 @@ impl ComponentCapturer for NativeComponentCapturer {
                         saved.clone()
                     } else {
                         let captured =
-                            render_page(&mut browser, snapshot, width, height, &c["box"], isolation.as_ref())
+                            render_page(&mut browser, snapshot, width, height, &c["box"], isolation.as_ref(), assembled)
                                 .map_err(|e| format!("{id} {key}: {e}"))?;
                         cache.insert(cache_key, captured.clone());
                         captured
@@ -294,7 +301,7 @@ impl ComponentCapturer for NativeComponentCapturer {
             }
             Ok(CapturedPreviews {
                 files,
-                evidence: json!({"schema":"native-component-previews-v1","browser":version,"components":evidence,"scope":"Pinned raster sources and static HTML/CSS/SVG captures. No visual, semantic or human-identity approval."}),
+                evidence: json!({"schema":"native-component-previews-v1","browser":version,"components":evidence,"scope":if assembled {"Pinned assembled page with local scripts, verified network inputs and stable DOM/pixels. No visual, semantic or human-identity approval."} else {"Pinned raster sources and static HTML/CSS/SVG captures. No visual, semantic or human-identity approval."}}),
             })
         })();
         browser.close();
@@ -305,6 +312,27 @@ impl ComponentCapturer for NativeComponentCapturer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires Chromium"]
+    fn assembled_page_executes_pinned_script_but_component_capture_stays_static() {
+        let image = impeccable_comp::raster::Image { width:40,height:40,data:vec![255;40*40*4] };
+        let reference = impeccable_comp::png_io::encode_png(&image,&[]).unwrap();
+        let html = br#"<!doctype html><style>html,body{margin:0;background:red}</style><div id="piece"></div><script src="app.js"></script>"#;
+        let inputs = BTreeMap::from([("comp.png".into(),reference),("index.html".into(),html.to_vec()),("app.js".into(),b"document.body.style.background='lime';document.documentElement.style.background='lime';".to_vec())]);
+        let packet = json!({"schemaVersion":2,"stage":"hero","comp":{"url":"/files/comp.png","width":40,"height":40},"components":[{"id":"hero","box":{"x":0,"y":0,"w":1,"h":1},"preview":{"kind":"page","url":"/files/index.html"},"dependencies":["app.js"]}]});
+        let mut hero = packet.clone();
+        let captured=NativeComponentCapturer.capture(&mut hero,&inputs).unwrap();
+        let path=hero["components"][0]["preview"]["url"].as_str().unwrap().strip_prefix("/files/").unwrap();
+        let pixels=impeccable_comp::png_io::decode_png(&captured.files[path]).unwrap().image;
+        assert_eq!(&pixels.data[..4], &[0,255,0,255]);
+        let proof=&captured.evidence["components"][0]["views"]["preview"];
+        assert_eq!(proof["kind"],"assembled-page");
+        assert_eq!(proof["observedDependencies"]["app.js"],hash(&inputs["app.js"]));
+        let mut component=packet.clone();component["stage"]=json!("components");component["components"][0]["preview"]["selector"]=json!("#piece");
+        assert!(NativeComponentCapturer.capture(&mut component,&inputs).err().unwrap().contains("static HTML"));
+        let mut missing=packet;missing["components"][0]["dependencies"]=json!([]);
+        assert!(NativeComponentCapturer.capture(&mut missing,&inputs).is_err());
+    }
     // Real browser regression: shared-document crops used to duplicate the
     // headline in its background card. Run explicitly on a browser-equipped host.
     #[test]

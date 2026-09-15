@@ -176,6 +176,14 @@ impl HtmlSnapshot {
         self.served.contains(&name).then_some(name)
     }
     pub fn serve(self: &Arc<Self>) -> Result<SnapshotServer, String> {
+        self.serve_with_scripts(false)
+    }
+    /// Assembled-page review executes only the pinned page's scripts. Network
+    /// APIs, frames, workers and form submission remain disabled by CSP.
+    pub fn serve_assembled(self: &Arc<Self>) -> Result<SnapshotServer, String> {
+        self.serve_with_scripts(true)
+    }
+    fn serve_with_scripts(self: &Arc<Self>, scripts: bool) -> Result<SnapshotServer, String> {
         let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
         let addr = listener.local_addr().map_err(|e| e.to_string())?;
         listener.set_nonblocking(true).map_err(|e| e.to_string())?;
@@ -188,7 +196,7 @@ impl HtmlSnapshot {
             while !worker_stop.load(Ordering::Acquire) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
-                        let _ = respond(&mut stream, &worker_host, &snapshot);
+                        let _ = respond(&mut stream, &worker_host, &snapshot, scripts);
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5))
@@ -332,6 +340,7 @@ fn respond(
     stream: &mut TcpStream,
     host: &str,
     snapshot: &HtmlSnapshot,
+    scripts: bool,
 ) -> Result<(), std::io::Error> {
     // BSD/macOS can inherit O_NONBLOCK from the listening socket. Explicitly
     // switch accepted streams back before write_all; otherwise large bodies
@@ -373,9 +382,10 @@ fn respond(
         Some(name) => ("200 OK", mime(name).unwrap(), snapshot.bytes(name).unwrap()),
         None => ("404 Not Found", "text/plain", b"Not found".as_slice()),
     };
+    let script_policy = if scripts { "script-src 'self' 'unsafe-inline'; worker-src 'none'; " } else { "" };
     write!(
         stream,
-        "HTTP/1.1 {status}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: private, max-age=3600, immutable\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'\r\n\r\n",
+        "HTTP/1.1 {status}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: private, max-age=3600, immutable\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'none'; {script_policy}style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'\r\n\r\n",
         body.len()
     )?;
     stream.write_all(body)

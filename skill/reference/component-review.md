@@ -44,7 +44,7 @@ For a raster placed inside the kit, add `context: {"kind":"page","path":".impecc
 
 The runtime also captures an unmodified **In context** view from that same document. This assembled view is reference only, not another component to approve. Keep each review target independently meaningful; use context to show a group together rather than submitting the same content for approval as both a combined component and its children. The final assembled hero still has its own review checkpoint. Include every file the document uses in `dependencies`, including linked CSS, fonts and images. The runtime also binds the measured spec for the component stage and checks its inventory. Local paths only. Static PNG, WebP and JPEG previews retain their original bytes and actual transparency; never draw a checkerboard into the asset.
 
-Native capture supports stable HTML/CSS and inline SVG. Supply a static review state for motion and keep the implementation's real inputs. A scripted, canvas or otherwise unsupported component is a blocker to report, not permission to substitute a raster or omit it.
+Component capture supports stable HTML/CSS and inline SVG. Supply a static review state for motion and keep the implementation's real inputs. A scripted, canvas or otherwise unsupported component is a blocker to report, not permission to substitute a raster or omit it.
 
 ## Present and wait
 
@@ -59,3 +59,5 @@ The user can approve components, request changes, and mark missing regions. Act 
 Build the page from the approved component files. Replacing, simplifying or changing an approved component requires a new component review. Run the existing plates and hero gates; human review does not waive their integrity checks.
 
 After the full page and responsive checks are complete, present a second manifest at `.impeccable/review/hero.json`, with `id` and `stage` set to `hero`. Use one page-preview component covering the assembled first viewport, its real HTML entry, and its complete dependency list. The reference stays the approved comp. Call the same host review tool (or native capture/serve/verify workflow) and obtain the user's approval before the final response. Later edits to the reviewed files require a fresh review. A component-kit approval does not approve their assembled layout.
+
+Assembled-page capture executes inline and declared local scripts from the pinned inputs. Network APIs, frames and workers are unavailable; the initial viewport must settle before capture. Keep the real page and declare its scripts rather than removing behavior to pass review.
