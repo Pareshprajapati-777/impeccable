@@ -545,27 +545,10 @@ fn scan_page_inner(
     }
 
     let analyses = step(profile, "visual-contrast", "browser-analyze", url, || {
-        snapshot_engine::analyze_visual_contrast(page, &base, 12.0, true)
+        snapshot_engine::analyze_visual_contrast(page, &base, 12.0, true, &config.ignore_selectors)
     })
     .map_err(cdp_err)?;
-    // The visual pass produces findings outside `collect_browser_findings`,
-    // so the component-level opt-outs are applied here against the same
-    // post-reveal snapshot, keyed on each candidate's own selector.
-    let waive = |selector: &str, rule: &str| -> String {
-        use impeccable_core::browser::Dom as _;
-        if config.ignore_selectors.is_empty() || selector.is_empty() {
-            return String::new();
-        }
-        let Ok(Some(el)) = base.query_one(None, selector) else {
-            return String::new();
-        };
-        impeccable_core::selector_ignores::waiving_selector(&config.ignore_selectors, rule, |sel| {
-            matches!(base.closest(el, sel), Ok(Some(_)))
-        })
-        .unwrap_or_default()
-        .to_string()
-    };
-    let visual = run_visual_contrast_fallback(page, &analyses, &serialized_groups, viewport, profile, url, &waive)?;
+    let visual = run_visual_contrast_fallback(page, &analyses, &serialized_groups, viewport, profile, url)?;
     results.extend(visual);
     Ok(results)
 }
@@ -604,9 +587,6 @@ fn run_visual_contrast_fallback(
     viewport: Viewport,
     profile: Option<&DetectorProfile>,
     target: &str,
-    // `(candidate selector, rule id) -> the detector.ignoreSelectors selector
-    // that waives it, or empty`.
-    waive: &dyn Fn(&str, &str) -> String,
 ) -> Result<Vec<RawResult>, EngineError> {
     let existing_low_contrast: Vec<String> = serialized_groups
         .iter()
@@ -633,10 +613,9 @@ fn run_visual_contrast_fallback(
                     .any(|s| Some(s.as_str()) == r.get("selector").and_then(Value::as_str))
         })
         .map(|r| {
-            let selector = r.get("selector").and_then(Value::as_str).unwrap_or("");
             let f = r.get("finding").expect("filtered on a truthy finding");
             let id = js_str(f.get("id"));
-            let ignored_by = waive(selector, &id);
+            let ignored_by = js_str_or_empty(r.get("ignoredBy"));
             RawResult {
                 id,
                 snippet: js_str(f.get("snippet")),
@@ -675,11 +654,6 @@ fn run_visual_contrast_fallback(
         })
         .collect();
     for candidate in filtered {
-        let candidate_selector = candidate
-            .get("selector")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
         let result = step_findings(profile, "visual-contrast", "pixel-diff", target, || {
             let f = screenshot_contrast::capture_visual_contrast_candidate(
                 page,
@@ -689,7 +663,7 @@ fn run_visual_contrast_fallback(
             .map_err(cdp_err)?;
             Ok::<_, EngineError>(
                 f.map(|f| {
-                    let ignored_by = waive(&candidate_selector, f.id);
+                    let ignored_by = js_str_or_empty(candidate.get("ignoredBy"));
                     vec![RawResult {
                         id: f.id.to_string(),
                         snippet: f.snippet,

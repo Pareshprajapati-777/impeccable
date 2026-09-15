@@ -205,6 +205,17 @@ pub fn collect_visual_contrast_reasons(dom: &dyn Dom, el: ElId) -> Vec<String> {
 
 /// JS: index.mjs#collectVisualContrastCandidates(options)
 pub fn collect_visual_contrast_candidates(dom: &dyn Dom, options: &Value) -> Vec<Value> {
+    let config: super::BrowserConfig = serde_json::from_value(options.clone()).unwrap_or_default();
+    collect_visual_contrast_candidates_with_ignores(dom, options, &config.ignore_selectors)
+}
+
+/// Evaluate component waivers while the actual candidate element is in hand.
+/// Display selectors can be non-unique; they must not identify the waiver owner.
+pub fn collect_visual_contrast_candidates_with_ignores(
+    dom: &dyn Dom,
+    options: &Value,
+    ignores: &[impeccable_foundation::selector_ignores::SelectorIgnore],
+) -> Vec<Value> {
     let max_candidates = match options.get("maxCandidates") {
         Some(Value::Number(n)) if n.as_f64().map_or(false, f64::is_finite) => {
             n.as_f64().unwrap()
@@ -296,6 +307,11 @@ pub fn collect_visual_contrast_candidates(dom: &dyn Dom, options: &Value) -> Vec
         let text = slice_utf16_prefix(&collapse_ws(js::trim(&direct)), 80);
         let mut m = Map::new();
         m.insert("selector".into(), Value::String(super::driver::generate_selector(dom, el)));
+        if let Some(selector) = impeccable_foundation::selector_ignores::waiving_selector(
+            ignores, "low-contrast", |selector| matches!(dom.closest(el, selector), Ok(Some(_))),
+        ) {
+            m.insert("ignoredBy".into(), Value::String(selector.to_string()));
+        }
         m.insert("tagName".into(), Value::String(tag));
         m.insert("text".into(), Value::String(text));
         m.insert("threshold".into(), json!(threshold));
@@ -1060,6 +1076,39 @@ mod tests {
 
     fn rgba(r: f64, g: f64, b: f64, a: f64) -> Rgba {
         Rgba::new(r, g, b, a)
+    }
+
+    #[test]
+    fn candidate_waivers_use_the_element_not_its_non_unique_display_selector() {
+        let mut dom = FakeDom::new();
+        let (_, body) = dom.with_page();
+        for waived in [true, false] {
+            let host = dom.add(Some(body), "section");
+            dom.set_rect(host, 0.0, 0.0, 400.0, 300.0);
+            if waived {
+                dom.add_selector(host, ".Waived");
+            }
+            let mut parent = host;
+            for _ in 0..12 {
+                parent = dom.add(Some(parent), "div");
+                dom.set_rect(parent, 0.0, 0.0, 400.0, 300.0);
+            }
+            let el = dom.add(Some(parent), "p");
+            dom.set_rect(el, 0.0, 0.0, 200.0, 40.0);
+            dom.add_text(el, "Repeated component text");
+            dom.set_styles(el, &[("color", "rgb(120, 120, 120)"), ("textShadow", "1px 1px black")]);
+        }
+        let candidates = collect_visual_contrast_candidates(&dom, &json!({
+            "ignoreSelectors": [{ "rule": "low-contrast", "selector": ".Waived" }]
+        }));
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0]["selector"], candidates[1]["selector"]);
+        assert_eq!(candidates[0]["ignoredBy"], ".Waived");
+        assert!(candidates[1].get("ignoredBy").is_none());
+        let early = unresolved(&candidates[0], "needs screenshot pixels");
+        assert_eq!(early["ignoredBy"], ".Waived");
+        let ordinary = collect_visual_contrast_candidates(&dom, &json!({}));
+        assert!(ordinary.iter().all(|c| c.get("ignoredBy").is_none()));
     }
 
     #[test]

@@ -123,12 +123,13 @@
   }
 
   function serialize(wasm, groups) {
-    return JSON.parse(wasm.serialize_findings(JSON.stringify(groups)));
+    return JSON.parse(wasm.serialize_findings(JSON.stringify(__reportableGroups(groups))));
   }
 
   // addVisualContrastResult over id-keyed groups: the two decisions are the
   // core's; this only keeps the map.
   function addVisualContrastResult(wasm, groups, result) {
+    if (result?.ignoredBy) return 0;
     const elId = wasm.visual_contrast_result_el(JSON.stringify(result));
     if (!elId) return 0;
     let group = groups.find(g => g.el === elId);
@@ -149,7 +150,7 @@
     const vc = createVisualContrast(IO);
     const t0 = performance.now();
     const collected = JSON.parse(await IO.core('collect_browser_findings', configJson(config)));
-    const groups = collected.groups;
+    const groups = __reportableGroups(collected.groups);
     const stats = { elements: n, coreMs: performance.now() - t0, unknownStyleProps: JSON.parse(wasm.snapshot_unknown_style_props()) };
     await ask(session, {
       stage: 'findings',

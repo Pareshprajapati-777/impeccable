@@ -118,7 +118,7 @@ if (IS_BROWSER && !__impeccable) {
   };
 
   function browserFindingsFromMap(groupMap) {
-    return [...groupMap.entries()].map(([el, findings]) => ({ el, findings }));
+    return __reportableGroups([...groupMap.entries()].map(([el, findings]) => ({ el, findings })));
   }
 
   function collectBrowserFindings() {
@@ -172,6 +172,7 @@ if (IS_BROWSER && !__impeccable) {
   }
 
   function addVisualContrastResult(groupMap, result, options = {}) {
+    if (result?.ignoredBy) return false;
     const elId = __impeccable.visual_contrast_result_el(JSON.stringify(result));
     const el = __el(elId);
     if (!el) return false;
@@ -467,7 +468,7 @@ if (IS_BROWSER && !__impeccable) {
       if (__impeccable.snapshot_has_needs()) out = { needs: JSON.parse(__impeccable.snapshot_take_needs()) };
       rounds++;
     }
-    const serialized = JSON.parse(__impeccable.serialize_findings(JSON.stringify(out.groups)));
+    const serialized = JSON.parse(__impeccable.serialize_findings(JSON.stringify(__reportableGroups(out.groups))));
     const unknownStyleProps = JSON.parse(__impeccable.snapshot_unknown_style_props());
     __impeccable.snapshot_clear();
     return {

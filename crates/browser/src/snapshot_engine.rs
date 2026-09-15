@@ -532,10 +532,11 @@ pub fn analyze_visual_contrast(
     base: &SnapshotDom,
     max_candidates: f64,
     scroll_offscreen: bool,
+    ignores: &[impeccable_core::selector_ignores::SelectorIgnore],
 ) -> CdpResult<Vec<Value>> {
     let options = json!({ "maxCandidates": max_candidates });
     let candidates = resolve_needs(base, page, |d| {
-        visual::collect_visual_contrast_candidates(d, &options)
+        visual::collect_visual_contrast_candidates_with_ignores(d, &options, ignores)
     })?;
     let mut results: Vec<Value> = Vec::with_capacity(candidates.len());
     let restore = live_scroll(page)?;
