@@ -20,7 +20,8 @@ use crate::checks::measures::{
 };
 use crate::checks::rules::{
     check_borders, check_colors, check_glow, check_hero_eyebrow, check_icon_tile,
-    check_italic_serif, check_motion, check_stripe_child, is_emoji_only_text, BorderOpts,
+    check_italic_serif, check_motion, check_placeholder_colors, check_stripe_child,
+    is_emoji_only_text, BorderOpts,
     ColorOpts, GlowOpts, HeroEyebrowOpts, IconTileOpts, ItalicSerifOpts, MotionOpts, RuleHit,
     Sides, HEADING_TAGS,
 };
@@ -511,8 +512,8 @@ pub fn check_element_colors_dom(dom: &dyn Dom, el: ElId) -> Vec<RuleHit> {
     } else {
         resolve_gradient_stops(dom, el)
     };
-    check_colors(&ColorOpts {
-        tag,
+    let color_opts = ColorOpts {
+        tag: tag.clone(),
         text_color: parse_rgb_or_any(&dom.style(el, "color")),
         bg_color: own_bg,
         effective_bg: if surface_unresolved {
@@ -529,7 +530,36 @@ pub fn check_element_colors_dom(dom: &dyn Dom, el: ElId) -> Vec<RuleHit> {
         bg_image: Some(dom.style(el, "backgroundImage")),
         class_list: Some(class_attr(dom, el)),
         detector_is_browser: true,
-    })
+    };
+    let mut findings = check_colors(&color_opts);
+    if tag == "input" || tag == "textarea" {
+        let placeholder = dom.attr(el, "placeholder").unwrap_or_default();
+        let placeholder = js::trim(&placeholder);
+        if !placeholder.is_empty() {
+            let skip = if tag == "input" {
+                let t = js::to_lower_case(&dom.attr(el, "type").unwrap_or_else(|| "text".into()));
+                matches!(
+                    t.as_str(),
+                    "hidden" | "checkbox" | "radio" | "file" | "submit" | "button" | "image"
+                        | "reset" | "range" | "color"
+                )
+            } else {
+                false
+            } || !matches_or_false(dom, el, ":placeholder-shown");
+            if !skip {
+                if let Some(ph_raw) = dom.pseudo_style(el, "::placeholder", "color") {
+                    if let Some(ph_color) = parse_rgb_or_any(&ph_raw) {
+                        findings.extend(check_placeholder_colors(
+                            &color_opts,
+                            placeholder,
+                            ph_color,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    findings
 }
 
 // ── icon tile / italic serif / hero eyebrow ───────────────────────────────
@@ -1466,6 +1496,61 @@ mod tests {
         d.set_styles(stripe, &[("backgroundColor", "rgb(245, 158, 11)")]);
         d.set_attr(host, "class", "card is-active");
         assert!(check_element_stripe_child_dom(&d, stripe).is_empty());
+    }
+
+    #[test]
+    fn placeholder_low_contrast_flags() {
+        let (mut d, body) = page();
+        let input = d.add(Some(body), "input");
+        visible(&mut d, input);
+        d.set_attr(input, "placeholder", "Pale Placeholder On White Field");
+        d.set_rect(input, 0.0, 0.0, 200.0, 40.0);
+        d.set_styles(
+            input,
+            &[
+                ("backgroundColor", "rgb(255, 255, 255)"),
+                ("color", "rgb(0, 0, 0)"),
+                ("fontSize", "16px"),
+                ("fontWeight", "400"),
+                ("webkitBackgroundClip", "border-box"),
+            ],
+        );
+        d.set_pseudo_style(input, "::placeholder", "color", "rgb(187, 187, 187)");
+        d.add_selector(input, ":placeholder-shown");
+        let hits = check_element_colors_dom(&d, input);
+        assert!(
+            hits.iter().any(|h| {
+                h.id == "low-contrast"
+                    && h.snippet.contains("placeholder \"Pale Placeholder On White Field\"")
+            }),
+            "{hits:?}"
+        );
+    }
+
+    #[test]
+    fn placeholder_skips_when_not_shown() {
+        let (mut d, body) = page();
+        let input = d.add(Some(body), "input");
+        visible(&mut d, input);
+        d.set_attr(input, "placeholder", "Pale Placeholder On White Field");
+        d.set_attr(input, "value", "");
+        d.set_rect(input, 0.0, 0.0, 200.0, 40.0);
+        d.set_styles(
+            input,
+            &[
+                ("backgroundColor", "rgb(255, 255, 255)"),
+                ("color", "rgb(0, 0, 0)"),
+                ("fontSize", "16px"),
+                ("fontWeight", "400"),
+                ("webkitBackgroundClip", "border-box"),
+            ],
+        );
+        d.set_pseudo_style(input, "::placeholder", "color", "rgb(187, 187, 187)");
+        let hits = check_element_colors_dom(&d, input);
+        assert!(
+            hits.iter().all(|h| h.id != "low-contrast"),
+            "live filled field must not score a hidden placeholder, {hits:?}"
+        );
     }
 
     #[test]
