@@ -942,7 +942,10 @@ pub static REGEX_MATCHERS: Lazy<Vec<Matcher>> = Lazy::new(|| {
                 let scope = containing_markup_tag(line)(m.index);
                 find_solid_chromatic_bg(&scope).is_some()
                     && stripe_child_markup_empty(line, m.index)
-                    && STRIPE_CHILD_CUE_RE.is_match(&scope)
+                    && STRIPE_CHILD_CUE_RE.find_iter(&scope).any(|cue| {
+                        hyphen_safe_prefix(&scope, cue.start())
+                            && hyphen_safe_suffix(&scope, cue.end())
+                    })
                     && !scope_has_fixed_height(&scope)
                     && !STRIPE_CHILD_ROUNDED_FULL_RE.is_match(&scope)
                     && !STRIPE_CHILD_ARIA_RE.is_match(&scope)
@@ -1520,6 +1523,18 @@ mod tests {
             g(r#"<div className={cn(a ? "bg-red-500" : "bg-blue-600", "text-slate-400")} />"#),
             vec!["text-slate-400 on bg-red-500"]
         );
+    }
+
+    #[test]
+    fn stripe_child_cues_require_complete_class_tokens() {
+        for cue in ["left-0.5", "right-0.5", "inset-y-0.5", "-left-0", "left-0/2", "shrink-0.5"] {
+            let source = format!(r#"<div className="w-1 {cue} bg-amber-500" />"#);
+            assert!(run("side-tab", &source).is_empty(), "{cue}");
+        }
+        for cue in ["left-0", "right-0", "inset-y-0", "shrink-0", "rounded-l-lg"] {
+            let source = format!(r#"<div className="w-1 {cue} bg-amber-500" />"#);
+            assert_eq!(run("side-tab", &source).len(), 1, "{cue}");
+        }
     }
 
     #[test]

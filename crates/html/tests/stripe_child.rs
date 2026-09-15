@@ -14,6 +14,17 @@ fn side_tab_snippets(html: &str) -> Vec<String> {
 }
 
 #[test]
+fn winning_auto_longhand_is_not_replaced_by_inset() {
+    let html = r#"<html><body><div style="position:relative;width:320px;height:100px">
+<div class="stripe" style="position:absolute;inset:0;left:auto;width:4px;background:#3b82f6"></div>
+</div></body></html>"#;
+    let hits = side_tab_snippets(html);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].contains("stripe child (right)"), "{hits:?}");
+    assert!(side_tab_snippets(&html.replace("left:auto", "left:auto;right:auto")).is_empty());
+}
+
+#[test]
 fn flex_row_first_child_flags() {
     let html = r#"<!DOCTYPE html><html><head><style>
 .card { display: flex; flex-direction: row; width: 320px; height: 100px; }

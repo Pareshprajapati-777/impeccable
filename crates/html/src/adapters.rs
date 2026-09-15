@@ -9,7 +9,7 @@ use crate::background::{
     a_ge, a_gt, read_own_background_color, resolve_background, resolve_background_info,
     resolve_border_radius_px, resolve_gradient_stops, sv, sv_opt, CustomPropMap,
 };
-use crate::cascade::{expand_static_box_values, split_css_tokens, StyleValues};
+use crate::cascade::StyleValues;
 use crate::dom::{StaticDocument, StaticElement};
 use crate::quality::{collapse_ws, pf0, resolve_font_size_px};
 use impeccable_core::checks::css_scan::css_length_to_px;
@@ -469,25 +469,6 @@ fn static_edge_hugs(value: &str) -> bool {
     n.is_finite() && n.abs() <= 2.0
 }
 
-fn static_resolved_inset(style: &StyleValues) -> [String; 4] {
-    let mut out = [
-        sv(style, "top").to_string(),
-        sv(style, "right").to_string(),
-        sv(style, "bottom").to_string(),
-        sv(style, "left").to_string(),
-    ];
-    let inset = sv(style, "inset");
-    if !inset.is_empty() {
-        let expanded = expand_static_box_values(&split_css_tokens(inset));
-        for (i, val) in expanded.into_iter().enumerate() {
-            if out[i].is_empty() || out[i] == "auto" {
-                out[i] = val;
-            }
-        }
-    }
-    out
-}
-
 /// JS: checks.mjs#checkElementStripeChild(el, style)
 pub fn check_element_stripe_child(el: &StaticElement<'_>, style: &StyleValues) -> Vec<RuleHit> {
     let tag = el.tag_lower();
@@ -518,7 +499,9 @@ pub fn check_element_stripe_child(el: &StaticElement<'_>, style: &StyleValues) -
     let host_style = host.style();
     let edge = if position == "absolute" || position == "fixed" {
         let height_raw = sv(style, "height");
-        let inset = static_resolved_inset(style);
+        // The cascade already expands inset; a winning `auto` longhand
+        // must not be overwritten by the earlier shorthand.
+        let inset = ["top", "right", "bottom", "left"].map(|prop| sv(style, prop));
         let height_stretches =
             height_raw == "100%" || (static_edge_hugs(&inset[0]) && static_edge_hugs(&inset[2]));
         if !height_stretches {
