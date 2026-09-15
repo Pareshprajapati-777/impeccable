@@ -312,7 +312,7 @@ export function mountComponentReview(host: HTMLElement, packet: ReviewPacket, op
         panes.forEach(p=>p.style.height=`${height}px`);
       }
       if(v&&panes.length){const size=comparisonSize(v.box.w*vp.comp.width,v.box.h*vp.comp.height,Math.min(...panes.map(p=>p.clientWidth)),Math.min(...panes.map(p=>p.clientHeight)),zoom);root.querySelectorAll<HTMLElement>('.crop-stage').forEach(el=>{el.style.width=`${size.width}px`;el.style.height=`${size.height}px`;});}
-      panes.forEach(p=>{const pannable=p.scrollWidth>p.clientWidth+1||p.scrollHeight>p.clientHeight+1;p.classList.toggle('pannable',pannable);p.title=pannable?'Move your pointer to pan. You can also scroll, swipe, or use arrow keys.':'';});
+      panes.forEach(p=>{const pannable=p.scrollWidth>p.clientWidth+1||p.scrollHeight>p.clientHeight+1;p.classList.toggle('pannable',pannable);p.style.cursor=expandedComparison?'':'zoom-in';p.setAttribute('role',expandedComparison?'region':'button');p.title=expandedComparison?(pannable?'Move your pointer to pan. You can also scroll, swipe, or use arrow keys.':''):'Click to enlarge comparison';});
       if(stage&&frame&&v){const s=stage.clientWidth/(v.box.w*vp.comp.width);frame.style.transform=`scale(${s})`;frame.style.left=`${-v.box.x*vp.comp.width*s}px`;frame.style.top=`${-v.box.y*vp.comp.height*s}px`;}
       const bounds=workbench.getBoundingClientRect();const region=root.querySelector<HTMLElement>('.region');const end=root.querySelector<HTMLElement>('.number');
       const path=root.querySelector<SVGPathElement>('.connector path');
@@ -355,6 +355,7 @@ export function mountComponentReview(host: HTMLElement, packet: ReviewPacket, op
     panes.forEach(pane=>{pane.scrollLeft=panLeft;pane.scrollTop=panTop;});
     panes.forEach(pane=>{
       pane.querySelectorAll('img').forEach(img=>img.draggable=false);
+      pane.addEventListener('click',()=>{if(!expandedComparison)setComparisonExpanded(true);});
       pane.addEventListener('pointermove',e=>{
         if(e.pointerType!=='mouse'||e.buttons||!pane.classList.contains('pannable'))return;
         const rect=pane.getBoundingClientRect();
@@ -362,6 +363,7 @@ export function mountComponentReview(host: HTMLElement, packet: ReviewPacket, op
         pane.scrollTop=hoverPan(e.clientY,rect.top,pane.clientHeight,pane.scrollHeight);
       });
       pane.addEventListener('keydown',e=>{
+        if(!expandedComparison&&(e.key==='Enter'||e.key===' ')){e.preventDefault();e.stopPropagation();setComparisonExpanded(true);return;}
         const delta:Record<string,[number,number]>={ArrowLeft:[-48,0],ArrowRight:[48,0],ArrowUp:[0,-48],ArrowDown:[0,48]};
         const move=delta[e.key];if(!move)return;e.preventDefault();e.stopPropagation();pane.scrollLeft+=move[0];pane.scrollTop+=move[1];
       });
