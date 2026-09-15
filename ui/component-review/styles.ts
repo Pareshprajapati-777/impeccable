@@ -70,4 +70,27 @@ export const styles = `
 .component-details .material{min-height:0;margin:12px 0 5px;gap:5px 8px}.component-details .material strong{font-size:11px;font-weight:500;color:var(--muted)}.component-details .material>.utility-icon{width:15px;height:15px}.component-details .material span{font-size:10px}
 @container(max-width:460px){.compare-toolbar .overlay-label{display:none}.compare-toolbar .overlay-control{width:34px;padding:7px}.compare-toolbar .zoom-control select{width:86px;padding-left:27px;padding-right:24px}.compare-toolbar .zoom-control>.utility-icon:first-child{left:8px}.compare-toolbar .zoom-control>.utility-icon:last-child{right:7px}}
 @media(forced-colors:active){.zoom-control select{appearance:auto;padding:6px 8px}.zoom-control>.utility-icon{display:none}}
+
+/* A full-page checkpoint is one comparison, not a component inventory. */
+.assembled-review>.workbench{grid-template-columns:minmax(0,1fr);gap:0}
+.assembled-review .workbench>.inspector{display:flex}
+.assembled-review .inspection-content{padding:16px 20px;scrollbar-gutter:auto}
+.assembled-review .compare{max-width:none;gap:20px}
+.assembled-review .pan-viewport{background:var(--canvas);border:1px solid #bdc6bd;box-shadow:inset 0 2px 7px #263d2a12}
+.assembled-review .inspector>.review-form{padding:12px 20px;max-height:55%}
+.assembled-review .decisions{display:flex;justify-content:flex-end;gap:10px}
+.assembled-review #approve{order:2;min-width:180px}
+.assembled-review .page-review-status{font-size:11px;color:var(--muted);text-align:right;line-height:1.4;overflow-wrap:anywhere}
+.assembled-review .page-review-status:empty{display:none}
+.assembled-review .review-form:has(#feedback-form){max-height:55%}
+.assembled-review .feedback-field textarea{min-height:64px;max-height:120px}
+.assembled-review .repair-context:empty{display:none}
+@media(max-width:800px){
+ .assembled-review>.workbench{display:flex;padding:10px}
+ .assembled-review .inspection-content{padding:10px}
+ .assembled-review .compare{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}
+ .assembled-review .inspector>.review-form{padding:10px}
+ .assembled-review .decisions>button{flex:1;min-width:0}
+ .assembled-review .page-review-status{text-align:left}
+}
 `;
