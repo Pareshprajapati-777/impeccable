@@ -140,25 +140,26 @@ fn locale_compare(a: &str, b: &str) -> std::cmp::Ordering {
 fn check(io: &mut Io) -> R<()> {
     let (sys, _) = ctx(io);
     let root = sys.find_project_root();
-    if sys.is_already_installed(&root, None).is_none() {
+    // Home-rooted checkout = user-level install. Use User scope so leftover
+    // project-layout dirs and unrelated harness skills cannot make a current
+    // impeccable install look stale (#824).
+    let scope = if sys.is_home_dir(&root) { Some(Scope::User) } else { None };
+    if sys.is_already_installed(&root, scope).is_none() {
         out(io, "Impeccable is not installed in this project.");
         out(io, "Run `npx impeccable install` to install.");
         return Err(Flow::Exit(0));
     }
-    let providers = sys.find_installed_providers(&root, None);
+    let providers = sys.find_impeccable_providers(&root, scope);
     out(io, "Checking for updates...\n");
     let result = (|| -> Result<bool, String> {
         let bundle_dir = bundle::download_and_extract_bundle(&sys)?;
-        // JS: agentScope 'user' for a home-rooted checkout (d2a9efb9), so
-        // check() judges agent freshness against the user agent dirs.
-        let agent_scope = if sys.is_home_dir(&root) { Some(Scope::User) } else { None };
-        let up_to_date = bundle::is_up_to_date(&sys, &root, &providers, &bundle_dir, None, agent_scope)?;
+        let up_to_date = bundle::is_up_to_date(&sys, &root, &providers, &bundle_dir, scope, scope)?;
         util::rm_rf(&bundle_dir);
         Ok(up_to_date)
     })();
     match result {
         Ok(true) => {
-            let v = sys.get_skills_version(&root, None);
+            let v = sys.get_skills_version(&root, scope);
             out(io, &format!("Skills are up to date{}.", version_suffix(&v)));
         }
         Ok(false) => {
