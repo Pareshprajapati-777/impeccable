@@ -1,6 +1,6 @@
 //! Project-scoped capture transport. Approval still belongs to the shared gate.
 //! Host adapters must independently audit retained evidence before accepting a run.
-use crate::entry_capture::CdpEntryRenderer;
+use crate::reviewed_entry::ReviewedEntryRenderer;
 use base64::Engine;
 use impeccable_comp_verbs::entry_capture::{
     CapturedEntry, EntryRenderer, EntryRequest, EntryStage,
@@ -98,6 +98,7 @@ pub fn serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     if key.len() < 32 {
         return Err("capability too short".into());
     }
+    let renderer=ReviewedEntryRenderer{session:std::env::var_os("IMPECCABLE_CAPTURE_REVIEW_SESSION").map(PathBuf::from)};
     let listener = TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
     std::fs::write(
@@ -141,7 +142,7 @@ pub fn serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                         "responsive" => EntryStage::Responsive,
                         _ => return Err("invalid stage".into()),
                     };
-                    let captured = CdpEntryRenderer.capture_entry(&EntryRequest {
+                    let captured = renderer.capture_entry(&EntryRequest {
                         root: PathBuf::from(&root),
                         artifact: text("entry")?.into(),
                         spec: text("spec")?.into(),
@@ -155,7 +156,7 @@ pub fn serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                     let evidence = captured.evidence();
                     let frames:Vec<_>=evidence.frames.iter().map(|f|json!({"name":f.name,"png":base64::engine::general_purpose::STANDARD.encode(&f.png),"regions":f.regions.iter().map(|r|r.receipt.clone()).collect::<Vec<_>>()})).collect();
                     let response =
-                        json!({"ok":true,"handle":handle,"report":evidence.report,"frames":frames});
+                        json!({"ok":true,"handle":handle,"report":evidence.report,"frames":frames,"approvedReference":captured.approved_reference().map(|a|json!({"png":base64::engine::general_purpose::STANDARD.encode(&a.png),"proof":a.proof}))});
                     if serde_json::to_vec(&response)
                         .map_err(|e| e.to_string())?
                         .len()
@@ -246,6 +247,7 @@ impl ServiceEntry {
     }
 }
 impl CapturedEntry for ServiceEntry {
+    fn approved_reference(&self)->Option<&impeccable_comp_verbs::entry_capture::ApprovedReference>{self.source.approved_reference()}
     fn evidence(&self) -> &impeccable_comp_verbs::entry_capture::EntryEvidence {
         &self.evidence
     }
@@ -301,6 +303,7 @@ fn audit_saved(
     if report != evidence.report {
         return Err("saved capture report differs from host evidence".into());
     }
+    if let Some(approved)=capture.approved_reference(){if read("human-approved.png")?!=approved.png{return Err("saved human reference differs from reviewed capture".into())}}
     for frame in &evidence.frames {
         if read(&format!("{}.png", frame.name))? != frame.png {
             return Err("saved frame differs from host capture".into());
@@ -385,10 +388,12 @@ impl RemoteEntryRenderer {
 }
 struct RemoteEntry {
     renderer: RemoteEntryRenderer,
+    approved: Option<impeccable_comp_verbs::entry_capture::ApprovedReference>,
     id: String,
     evidence: impeccable_comp_verbs::entry_capture::EntryEvidence,
 }
 impl CapturedEntry for RemoteEntry {
+    fn approved_reference(&self)->Option<&impeccable_comp_verbs::entry_capture::ApprovedReference>{self.approved.as_ref()}
     fn evidence(&self) -> &impeccable_comp_verbs::entry_capture::EntryEvidence {
         &self.evidence
     }
@@ -467,6 +472,12 @@ impl EntryRenderer for RemoteEntryRenderer {
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(Box::new(RemoteEntry {
+                approved: if result["approvedReference"].is_null(){None}else{
+                    let a=&result["approvedReference"];
+                    let png=base64::engine::general_purpose::STANDARD.decode(a["png"].as_str().ok_or("missing reviewed PNG")?).map_err(|e|e.to_string())?;
+                    if a["proof"]["schema"]!="human-assembled-reference-v1" || a["proof"]["sha256"]!=impeccable_comp_verbs::asset_capture::capture_sha256(&png) || a["proof"]!=result["report"]["humanTextReview"] {return Err("invalid human reference proof".into())}
+                    Some(impeccable_comp_verbs::entry_capture::ApprovedReference{png,proof:a["proof"].clone()})
+                },
                 renderer: self.clone(),
                 id: id.clone(),
                 evidence: EntryEvidence {

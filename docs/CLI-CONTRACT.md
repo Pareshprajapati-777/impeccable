@@ -1862,3 +1862,9 @@ The packet and evidence contract is documented in
 ### Component review verification
 
 `impeccable component-review verify --manifest <project-relative JSON>` reads the current native capture and user receipt. It succeeds only for an approved, natively captured round whose manifest and dependency bytes are unchanged. Pending reviews, requested repairs, changed files, and an unrelated manifest sharing the same id fail. It neither creates nor submits approvals.
+
+### Human-reviewed text at the final comp gate
+
+For native comp-led runs, a verified assembled-page review can resolve a text-style contradiction against the original comp. The renderer reads the private native review session, binds the approved screenshot and source bytes, and compares the disputed text region against that human-approved rendering at the current desktop breakpoint. The original comp scores remain in the report; accepted region IDs and the review revision are recorded separately under `humanTextReview`.
+
+This does not waive missing regions, overall comp fidelity, controls, raster production/placement, source integrity, or native capture checks. Changed reviewed sources, an unreviewed current dependency, a stale receipt, a partial component capture, or a changed approved image cannot provide this evidence. A host capture service may select its private native review session with `IMPECCABLE_CAPTURE_REVIEW_SESSION` at service startup; this is not a caller-supplied capture parameter. Standalone native builds use the matching local component-review session.

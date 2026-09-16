@@ -6,3 +6,5 @@ pub mod capture_snapshot;
 pub mod entry_capture;
 
 pub mod capture_service;
+
+pub mod reviewed_entry;

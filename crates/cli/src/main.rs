@@ -89,7 +89,7 @@ fn run(args: &[String], io: &mut Io) -> i32 {
             };
             match impeccable::capture_service::RemoteEntryRenderer::from_env(&io.env) {
                 Ok(Some(renderer)) => impeccable_comp_verbs::build_phase::run_with_renderer(rest, io, &organic, Some(&renderer)),
-                Ok(None) => impeccable_comp_verbs::build_phase::run_with_renderer(rest, io, &organic, Some(&impeccable::entry_capture::CdpEntryRenderer)),
+                Ok(None) => { let renderer=impeccable::reviewed_entry::ReviewedEntryRenderer::local(&io.cwd,io.home().as_deref()); impeccable_comp_verbs::build_phase::run_with_renderer(rest, io, &organic, Some(&renderer)) },
                 Err(e) => { io.err(&format!("Native capture service: {e}\n")); 1 }
             }
         }

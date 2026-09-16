@@ -24,7 +24,9 @@ pub struct EntryEvidence {
     pub report: Value,
     pub frames: Vec<FrameEvidence>,
 }
+pub struct ApprovedReference { pub png: Vec<u8>, pub proof: Value }
 pub trait CapturedEntry {
+    fn approved_reference(&self) -> Option<&ApprovedReference> { None }
     fn evidence(&self) -> &EntryEvidence;
     /// Recheck original bytes while this in-process capture still owns its snapshot.
     fn verify_current(&self) -> Result<(), String>;

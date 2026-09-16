@@ -1163,6 +1163,7 @@ fn prepare_native_capture(
     );
     let save = (|| -> Result<(), String> {
         std::fs::create_dir_all(abs(io, &directory)).map_err(|e| e.to_string())?;
+        if let Some(approved)=capture.approved_reference(){std::fs::write(abs(io,&format!("{directory}/human-approved.png")),&approved.png).map_err(|e|e.to_string())?;}
         for frame in &capture.evidence().frames {
             if !matches!(frame.name.as_str(), "hero" | "desktop" | "mobile") {
                 return Err("unknown native capture frame".into());
@@ -2139,6 +2140,12 @@ fn gate_responsive_inner(io: &Io, state: &mut Value, min: f64, out_dir: &str, na
             true
         })
         .cloned().collect();
+    // Keep the original scores and all missing/integrity/overall blockers.
+    // A human-approved assembly can qualify a text-style contradiction only
+    // when that region still matches the approved rendering at desktop width.
+    let accepted_text = native.and_then(|n| n.capture.approved_reference().map(|a|(n,a)))
+        .and_then(|(n,a)| hero_diff_labeled(io,&n.path("human-approved"),desktop,spec.as_ref(),&format!("{out_dir}/human-reviewed"),"human-reviewed").ok().map(|(r,_)|(r,a.proof.clone())));
+    if let Some((comparison,proof))=&accepted_text {report["humanTextReview"]=json!({"proof":proof,"comparison":comparison});}
     let contradicted_direction: Vec<Value> = regions.iter().filter(|r| r.get("verdict").and_then(Value::as_str) == Some("contradicted") && matches!(r.get("kind").and_then(Value::as_str), Some("text" | "control"))).cloned().collect();
     for region in &mut regions {
         if region.get("verdict").and_then(Value::as_str) == Some("missing")
@@ -2165,6 +2172,11 @@ fn gate_responsive_inner(io: &Io, state: &mut Value, min: f64, out_dir: &str, na
         push_region_blocker(&mut reasons, &mut region_reasons, id, format!("at desktop width, region {id} is missing"));
     }
     for r in &contradicted_direction {
+        let accepted = r["kind"]=="text" && accepted_text.as_ref().is_some_and(|(comparison,_)| comparison["regions"].as_array().is_some_and(|reviewed| reviewed.iter().any(|region|region["id"]==r["id"] && matches!(region["verdict"].as_str(),Some("match"|"drift")) && rscore(region,"structure")>=0.75)));
+        if accepted {
+            report["humanTextReview"]["acceptedTextRegions"].as_array_mut().map(|v|v.push(r["id"].clone())).unwrap_or_else(||{report["humanTextReview"]["acceptedTextRegions"]=json!([r["id"].clone()]);});
+            continue;
+        }
         push_region_blocker(&mut reasons, &mut region_reasons, r.get("id").and_then(Value::as_str).unwrap_or(""), format!(
             "at desktop width, region {} ({}) is contradicted (structure {}%)",
             r.get("id").and_then(Value::as_str).unwrap_or(""),
