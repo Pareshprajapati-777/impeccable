@@ -1,5 +1,5 @@
 use super::manifest::{digest, freeze, relative, string, valid_box};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{
     fs,
     io::Write,
@@ -216,12 +216,10 @@ fn prepare_bound(
     packet["round"] = json!(round);
     // URLs include the frozen revision, so a new round cannot silently replace old preview pixels.
     let prefix = format!("/files/{rev}/");
-    packet["comp"]["url"] = json!(
-        packet["comp"]["url"]
-            .as_str()
-            .unwrap()
-            .replacen("/files/", &prefix, 1)
-    );
+    packet["comp"]["url"] = json!(packet["comp"]["url"]
+        .as_str()
+        .unwrap()
+        .replacen("/files/", &prefix, 1));
     for c in packet["components"].as_array_mut().unwrap() {
         for key in ["preview", "context", "thumbnail"] {
             if let Some(url) = c[key]["url"].as_str() {
@@ -257,6 +255,9 @@ fn prepare_bound(
         }
     }
     let mut state = json!({"schemaVersion":1,"contentRevision":content_revision,"project":project,"packet":packet,"files":hashes,"sources":sources,"capture":capture,"draft":draft,"receipt":null});
+    if let Some(previous) = &old {
+        super::visual_approval::carry(previous, &mut state, &blobs);
+    }
     state["history"] = old
         .as_ref()
         .map(|previous| super::history::between(previous, &state))
@@ -374,4 +375,31 @@ pub fn submit(dir: &Path, body: &Value) -> Result<Value, String> {
     write(&dir.join("current.json"), &state)?;
     // current.json is the authoritative atomic commit; a receipt export is not approval authority.
     Ok(receipt)
+}
+
+/// Update only an unsubmitted draft, retaining packet/source identity and old receipts.
+pub fn refresh_approvals(dir: &Path) -> Result<usize, String> {
+    let _guard = lock(dir)?;
+    let mut state = read(&dir.join("current.json"))?;
+    if !state["receipt"].is_null() {
+        return Ok(0);
+    }
+    sources_current(&state)?;
+    let Some(rev) = state["history"]["packet"]["revision"].as_str() else {
+        return Ok(0);
+    };
+    if rev.len() != 64 || !rev.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("invalid previous revision".into());
+    }
+    let previous = read(&dir.join(format!("revisions/{rev}.json")))?;
+    if previous["packet"]["revision"] != rev {
+        return Err("previous revision mismatch".into());
+    }
+    let count = super::visual_approval::carry(&previous, &mut state, &dir.join("blobs"));
+    let history = super::history::between(&previous, &state);
+    if count > 0 || state["history"] != history {
+        state["history"] = history;
+        write(&dir.join("current.json"), &state)?;
+    }
+    Ok(count)
 }

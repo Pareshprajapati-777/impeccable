@@ -4,9 +4,10 @@ mod history;
 mod manifest;
 mod server;
 mod store;
-pub mod verify;
 #[cfg(test)]
 mod tests;
+pub mod verify;
+mod visual_approval;
 use impeccable_common::Io;
 use serde_json::json;
 use std::path::PathBuf;
@@ -78,13 +79,17 @@ pub fn run_with_capturer(
                 io.out(&format!("{}\n", receipt));
                 Ok(())
             }
-            Some("serve") | Some("status") => {
+            Some("serve") | Some("status") | Some("refresh-approvals") => {
                 let id = arg(args, "--session").ok_or("needs --session <id from prepare>")?;
                 if id.len() != 64 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
                     return Err("invalid session id".into());
                 }
                 let dir = store.join(id);
-                if args[0] == "serve" {
+                if args[0] == "refresh-approvals" {
+                    let count=store::refresh_approvals(&dir)?;
+                    io.out(&format!("{}\n",json!({"carried":count})));
+                    Ok(())
+                } else if args[0] == "serve" {
                     let port = arg(args, "--port")
                         .unwrap_or_else(|| "0".into())
                         .parse::<u16>()
@@ -102,7 +107,7 @@ pub fn run_with_capturer(
                     Ok(())
                 }
             }
-            _ => Err("usage: impeccable component-review prepare|capture|verify --manifest <file> | serve --session <id> [--port 0] | status --session <id> [--store <outside-project-dir>]".into())
+            _ => Err("usage: impeccable component-review prepare|capture|verify --manifest <file> | serve --session <id> [--port 0] | status|refresh-approvals --session <id> [--store <outside-project-dir>]".into())
         }
     })();
     match result {

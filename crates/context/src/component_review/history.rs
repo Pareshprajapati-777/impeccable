@@ -72,7 +72,10 @@ pub fn between(previous: &Value, current: &Value) -> Value {
                 .filter(|p| before.get(*p) != after.get(*p))
                 .cloned()
                 .collect();
-            let unchanged = prior["revision"] == component["revision"];
+            let source_changed = prior["revision"] != component["revision"];
+            let unchanged = !source_changed || (current["visualApprovalCarry"][id]["basis"] == "identical-native-captures-v1"
+                && current["visualApprovalCarry"][id]["fromPacketRevision"] == previous["packet"]["revision"]);
+
             let mut reasons = Vec::new();
             if !files.is_empty() {
                 reasons.push("files");
@@ -83,7 +86,7 @@ pub fn between(previous: &Value, current: &Value) -> Value {
             if !unchanged && reasons.is_empty() {
                 reasons.push("definition");
             }
-            json!({"kind":if unchanged{"unchanged"}else{"changed"},"files":files,"reasons":reasons})
+            json!({"kind":if unchanged{"unchanged"}else{"changed"},"files":files,"reasons":reasons,"sourceChanged":source_changed})
         } else {
             json!({"kind":"added","files":[],"reasons":[]})
         };

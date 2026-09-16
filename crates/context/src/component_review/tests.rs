@@ -525,3 +525,119 @@ fn shared_target_changes_invalidate_other_isolated_components() {
     input["stage"] = Value::Null;
     assert!(manifest::freeze(&f.project,&input).is_err());
 }
+
+#[test]
+fn visual_approvals_survive_shared_source_edits_but_not_changed_scope_or_pixels() {
+    struct Renderer(&'static [u8]);
+    impl super::capture::ComponentCapturer for Renderer {
+        fn capture(
+            &mut self,
+            packet: &mut Value,
+            _: &std::collections::BTreeMap<String, Vec<u8>>,
+        ) -> Result<super::capture::CapturedPreviews, String> {
+            packet["components"][1]["preview"] = json!({"kind":"image","sourceKind":"page","url":"/files/_review_captures/control.png"});
+            Ok(super::capture::CapturedPreviews {
+                files: std::collections::BTreeMap::from([(
+                    "_review_captures/control.png".into(),
+                    self.0.to_vec(),
+                )]),
+                evidence: json!({"schema":"native-component-previews-v1","components":[{"id":"art"},{"id":"control","views":{"preview":{"kind":"static-code","entry":"control.html","screenshotSha256":manifest::digest(self.0),"viewport":{"width":100,"height":100,"dpr":1}}}}]}),
+            })
+        }
+    }
+    let f = Fixture::new();
+    let dir = store::prepare_captured(
+        &f.store,
+        &f.project,
+        &f.manifest(),
+        Some(&mut Renderer(b"same pixels")),
+    )
+    .unwrap();
+    let before = store::read(&dir.join("current.json")).unwrap();
+    store::submit(&dir, &approve(&before)).unwrap();
+    fs::write(
+        f.project.join("shared.css"),
+        b"button{color:red} .unrelated{color:blue}",
+    )
+    .unwrap();
+    assert!(store::sources_current(&before).is_err());
+    store::prepare_captured(
+        &f.store,
+        &f.project,
+        &f.manifest(),
+        Some(&mut Renderer(b"same pixels")),
+    )
+    .unwrap();
+    let mut after = store::read(&dir.join("current.json")).unwrap();
+    assert_ne!(
+        before["packet"]["components"][1]["revision"],
+        after["packet"]["components"][1]["revision"]
+    );
+    assert_eq!(after["draft"]["decisions"]["control"]["action"], "approve");
+    assert_eq!(
+        after["visualApprovalCarry"]["control"]["basis"],
+        "identical-native-captures-v1"
+    );
+    assert!(after["receipt"].is_null());
+    assert_eq!(after["history"]["changes"]["control"]["kind"], "unchanged");
+    assert_eq!(after["history"]["changes"]["control"]["sourceChanged"], true);
+    assert_eq!(after["history"]["changes"]["control"]["carried"], true);
+    // Existing pending packets can gain carry-forward without changing their revision.
+    after["draft"]["decisions"]
+        .as_object_mut()
+        .unwrap()
+        .remove("control");
+    store::write(&dir.join("current.json"), &after).unwrap();
+    assert_eq!(store::refresh_approvals(&dir).unwrap(), 1);
+    assert_eq!(store::refresh_approvals(&dir).unwrap(), 0);
+    let carried = store::read(&dir.join("current.json")).unwrap();
+    assert_eq!(carried["packet"], after["packet"]);
+    assert_eq!(carried["sources"], after["sources"]);
+    // Changed scope, comp, preview bytes, absent proof and corrupt blobs fail closed.
+    let previous = store::read(&dir.join(format!(
+        "revisions/{}.json",
+        before["packet"]["revision"].as_str().unwrap()
+    )))
+    .unwrap();
+    for field in ["box", "medium", "note", "context"] {
+        let mut changed = after.clone();
+        changed["packet"]["components"][1][field] = json!("changed");
+        assert_eq!(
+            super::visual_approval::carry(&previous, &mut changed, &dir.join("blobs")),
+            0,
+            "{field}"
+        );
+    }
+    let mut changed = after.clone();
+    changed["capture"] = Value::Null;
+    assert_eq!(
+        super::visual_approval::carry(&previous, &mut changed, &dir.join("blobs")),
+        0
+    );
+    let mut changed = after.clone();
+    changed["draft"]["decisions"]["control"] = json!({"action":"revise"});
+    assert_eq!(
+        super::visual_approval::carry(&previous, &mut changed, &dir.join("blobs")),
+        0
+    );
+    let mut changed = after.clone();
+    changed["capture"]["components"][1]["views"]["preview"]["viewport"]["width"] = json!(200);
+    assert_eq!(super::visual_approval::carry(&previous, &mut changed, &dir.join("blobs")), 0);
+    let mut unsubmitted = previous.clone();
+    unsubmitted["receipt"] = Value::Null;
+    assert_eq!(super::visual_approval::carry(&unsubmitted, &mut after.clone(), &dir.join("blobs")), 0);
+    let pixel_path = dir.join("blobs").join(manifest::digest(b"same pixels"));
+    fs::write(&pixel_path, b"corrupted capture").unwrap();
+    assert_eq!(super::visual_approval::carry(&previous, &mut after.clone(), &dir.join("blobs")), 0);
+    fs::write(&pixel_path, b"same pixels").unwrap();
+    store::submit(&dir, &approve(&carried)).unwrap();
+    store::prepare_captured(
+        &f.store,
+        &f.project,
+        &f.manifest(),
+        Some(&mut Renderer(b"different pixels")),
+    )
+    .unwrap();
+    let changed = store::read(&dir.join("current.json")).unwrap();
+    assert!(changed["draft"]["decisions"]["control"].is_null());
+}

@@ -1868,3 +1868,18 @@ The packet and evidence contract is documented in
 For native comp-led runs, a verified assembled-page review can resolve a text-style contradiction against the original comp. The renderer reads the private native review session, binds the approved screenshot and source bytes, and compares the disputed text region against that human-approved rendering at the current desktop breakpoint. The original comp scores remain in the report; accepted region IDs and the review revision are recorded separately under `humanTextReview`.
 
 This does not waive missing regions, overall comp fidelity, controls, raster production/placement, source integrity, or native capture checks. Changed reviewed sources, an unreviewed current dependency, a stale receipt, a partial component capture, or a changed approved image cannot provide this evidence. A host capture service may select its private native review session with `IMPECCABLE_CAPTURE_REVIEW_SESSION` at service startup; this is not a caller-supplied capture parameter. Standalone native builds use the matching local component-review session.
+
+
+### Visual approval carry-forward
+
+Native component review carries a submitted approval when all displayed image
+bytes and review scope are identical, even if shared source files changed.
+The comparison includes the approved comp, region, representation, declared
+component definition, and native capture geometry. Changed or unverified views
+remain unapproved. Source revisions and integrity validation remain independent;
+carrying a visual decision never creates a submitted receipt or accepts stale files.
+
+`component-review refresh-approvals --session <id> --store <directory>` applies
+this rule to an existing unsubmitted draft. It verifies stored image blobs and
+current source integrity, preserves any new reviewer decisions, records the
+prior approval revision, and leaves packet revisions and old receipts unchanged.
