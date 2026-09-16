@@ -115,48 +115,70 @@ tB0WGTOG3QIgdJa8gBPU9Y6WsrursItsnUeGTYHKDCZZ6MjlekLFuoc=
         let _agent = agent_builder().build();
     }
 
+    struct ProxyEnvGuard {
+        saved: Vec<(String, Option<String>)>,
+    }
+
+    impl ProxyEnvGuard {
+        fn set(vars: &[(&str, Option<&str>)]) -> Self {
+            let saved = vars
+                .iter()
+                .map(|(key, _)| (key.to_string(), std::env::var(key).ok()))
+                .collect();
+            for (key, value) in vars {
+                match value {
+                    // SAFETY: PROXY_ENV_LOCK serializes every test that
+                    // reads or writes these process-global proxy vars.
+                    Some(v) => unsafe { std::env::set_var(key, v) },
+                    None => unsafe { std::env::remove_var(key) },
+                }
+            }
+            Self { saved }
+        }
+    }
+
+    impl Drop for ProxyEnvGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.saved {
+                match value {
+                    // SAFETY: same lock as set(); restore before unlock.
+                    Some(v) => unsafe { std::env::set_var(key, v) },
+                    None => unsafe { std::env::remove_var(key) },
+                }
+            }
+        }
+    }
+
+    fn accept_until(
+        listener: std::net::TcpListener,
+        mut handle: impl FnMut(&mut std::net::TcpStream) -> bool,
+    ) {
+        use std::time::Duration;
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking proxy listener");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            let Ok((mut stream, _)) = listener.accept() else {
+                std::thread::sleep(Duration::from_millis(10));
+                continue;
+            };
+            let _ = stream.set_nonblocking(false);
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+            let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(2)));
+            if handle(&mut stream) {
+                return;
+            }
+        }
+    }
+
     #[test]
     fn agent_honors_http_proxy_from_env() {
         use std::io::{Read, Write};
         use std::net::TcpListener;
-        use std::sync::MutexGuard;
         use std::time::Duration;
 
-        struct ProxyEnvGuard {
-            saved: Vec<(String, Option<String>)>,
-        }
-
-        impl ProxyEnvGuard {
-            fn set(vars: &[(&str, Option<&str>)]) -> Self {
-                let saved = vars
-                    .iter()
-                    .map(|(key, _)| (key.to_string(), std::env::var(key).ok()))
-                    .collect();
-                for (key, value) in vars {
-                    match value {
-                        // SAFETY: PROXY_ENV_LOCK serializes every test that
-                        // reads or writes these process-global proxy vars.
-                        Some(v) => unsafe { std::env::set_var(key, v) },
-                        None => unsafe { std::env::remove_var(key) },
-                    }
-                }
-                Self { saved }
-            }
-        }
-
-        impl Drop for ProxyEnvGuard {
-            fn drop(&mut self) {
-                for (key, value) in &self.saved {
-                    match value {
-                        // SAFETY: same lock as set(); restore before unlock.
-                        Some(v) => unsafe { std::env::set_var(key, v) },
-                        None => unsafe { std::env::remove_var(key) },
-                    }
-                }
-            }
-        }
-
-        let _lock: MutexGuard<'_, ()> = PROXY_ENV_LOCK.lock().unwrap();
+        let _lock = PROXY_ENV_LOCK.lock().unwrap();
 
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind proxy listener");
         let proxy_addr = listener.local_addr().expect("proxy listener addr");
@@ -164,26 +186,19 @@ tB0WGTOG3QIgdJa8gBPU9Y6WsrursItsnUeGTYHKDCZZ6MjlekLFuoc=
         let request = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
         let request_for_thread = request.clone();
         let handle = std::thread::spawn(move || {
-            listener
-                .set_nonblocking(true)
-                .expect("nonblocking proxy listener");
-            let deadline = std::time::Instant::now() + Duration::from_secs(5);
-            while std::time::Instant::now() < deadline {
-                let Ok((mut stream, _)) = listener.accept() else {
-                    std::thread::sleep(Duration::from_millis(10));
-                    continue;
-                };
-
+            accept_until(listener, |stream| {
                 let mut buf = [0u8; 4096];
                 let n = stream.read(&mut buf).unwrap_or(0);
                 let chunk = &buf[..n];
-                if !chunk.is_empty() && String::from_utf8_lossy(chunk).contains("proxy-test.invalid") {
-                    request_for_thread.lock().unwrap().extend_from_slice(chunk);
-                    let response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
-                    let _ = stream.write_all(response);
-                    return;
+                if chunk.is_empty()
+                    || !String::from_utf8_lossy(chunk).contains("proxy-test.invalid")
+                {
+                    return false;
                 }
-            }
+                request_for_thread.lock().unwrap().extend_from_slice(chunk);
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+                true
+            });
         });
 
         let proxy_url = format!("http://127.0.0.1:{}", proxy_addr.port());
@@ -209,6 +224,81 @@ tB0WGTOG3QIgdJa8gBPU9Y6WsrursItsnUeGTYHKDCZZ6MjlekLFuoc=
         assert!(
             request_text.contains("proxy-test.invalid"),
             "proxy should receive request for target host, got: {request_text:?}"
+        );
+    }
+
+    #[test]
+    fn agent_honors_socks5_all_proxy_from_env() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::time::Duration;
+
+        fn socks5_then_http(stream: &mut std::net::TcpStream) -> Option<Vec<u8>> {
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            if n < 2 || buf[0] != 5 {
+                return None;
+            }
+            stream.write_all(&[0x05, 0x00]).ok()?;
+            let n = stream.read(&mut buf).unwrap_or(0);
+            if n < 7 || buf[0] != 5 || buf[1] != 1 {
+                return None;
+            }
+            stream
+                .write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+                .ok()?;
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let chunk = buf[..n].to_vec();
+            if chunk.is_empty()
+                || !String::from_utf8_lossy(&chunk).contains("proxy-test.invalid")
+            {
+                return None;
+            }
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+            Some(chunk)
+        }
+
+        let _lock = PROXY_ENV_LOCK.lock().unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind socks listener");
+        let proxy_addr = listener.local_addr().expect("socks listener addr");
+
+        let request = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let request_for_thread = request.clone();
+        let handle = std::thread::spawn(move || {
+            accept_until(listener, |stream| {
+                if let Some(chunk) = socks5_then_http(stream) {
+                    *request_for_thread.lock().unwrap() = chunk;
+                    true
+                } else {
+                    false
+                }
+            });
+        });
+
+        let proxy_url = format!("socks5://127.0.0.1:{}", proxy_addr.port());
+        let _env_guard = ProxyEnvGuard::set(&[
+            ("ALL_PROXY", Some(&proxy_url)),
+            ("all_proxy", Some(&proxy_url)),
+            ("HTTPS_PROXY", None),
+            ("https_proxy", None),
+            ("HTTP_PROXY", None),
+            ("http_proxy", None),
+        ]);
+
+        let agent = agent_builder()
+            .timeout(Duration::from_secs(2))
+            .build();
+        let response = agent.get("http://proxy-test.invalid/").call();
+        assert!(response.is_ok(), "expected SOCKS5-routed GET to succeed");
+
+        handle.join().expect("socks thread");
+
+        let request_bytes = request.lock().unwrap().clone();
+        let request_text = String::from_utf8_lossy(&request_bytes);
+        assert!(
+            request_text.contains("proxy-test.invalid"),
+            "SOCKS proxy should receive request for target host, got: {request_text:?}"
         );
     }
 }
