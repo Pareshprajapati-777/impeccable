@@ -528,6 +528,33 @@ fn check_ignores_leftover_pi_project_layout_in_home_rooted_tree() {
 }
 
 #[test]
+fn check_sees_home_rooted_project_scope_pi_install() {
+    let root = temp_root("check-824-pi-project");
+    let home = format!("{root}/home");
+    let tmpdir = format!("{root}/tmp");
+    for d in [&home, &tmpdir] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    std::fs::create_dir_all(format!("{home}/.git")).unwrap();
+    let bundle_root = create_fake_universal_bundle(&home, &[".pi"]);
+    let env = base_env(&home, &tmpdir, &bundle_root);
+
+    let r = run_cli(
+        &["install", "-y", "--scope=project", "--no-hooks", "--providers=pi"],
+        &home,
+        &env,
+    );
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    assert!(std::path::Path::new(&format!("{home}/.pi/skills/impeccable/SKILL.md")).exists());
+    assert!(!std::path::Path::new(&format!("{home}/.pi/agent/skills/impeccable/SKILL.md")).exists());
+
+    let r = run_cli(&["check"], &home, &env);
+    assert!(!r.stdout.contains("not installed"), "{}\n{}", r.stdout, r.stderr);
+    assert!(r.stdout.contains("Skills are up to date"), "{}\n{}", r.stdout, r.stderr);
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn check_reports_stale_impeccable_in_home_rooted_tree() {
     let root = temp_root("check-824-stale");
     let home = format!("{root}/home");

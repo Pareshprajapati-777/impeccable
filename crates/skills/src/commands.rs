@@ -140,10 +140,15 @@ fn locale_compare(a: &str, b: &str) -> std::cmp::Ordering {
 fn check(io: &mut Io) -> R<()> {
     let (sys, _) = ctx(io);
     let root = sys.find_project_root();
-    // Home-rooted checkout = user-level install. Use User scope so leftover
-    // project-layout dirs and unrelated harness skills cannot make a current
-    // impeccable install look stale (#824).
-    let scope = if sys.is_home_dir(&root) { Some(Scope::User) } else { None };
+    // Prefer the user-level tree when one exists so leftover project-layout
+    // dirs cannot make a current install look stale (#824). Stay on inferred
+    // scope otherwise so a home-rooted project install (`install -y`) is
+    // still visible.
+    let scope = if sys.is_home_dir(&root) && sys.is_already_installed(&root, Some(Scope::User)).is_some() {
+        Some(Scope::User)
+    } else {
+        None
+    };
     if sys.is_already_installed(&root, scope).is_none() {
         out(io, "Impeccable is not installed in this project.");
         out(io, "Run `npx impeccable install` to install.");
