@@ -15,18 +15,30 @@
 //! fails to load, verifies against the bundled roots exactly as before.
 //! `SSL_CERT_FILE` / `SSL_CERT_DIR` stand in for the OS store, as they do
 //! for OpenSSL and curl; the bundled roots stay either way.
+//!
+//! The shared agent builder also honors `ALL_PROXY`, `HTTPS_PROXY`, and
+//! `HTTP_PROXY` (and their lowercase forms) so `update` and `install` work
+//! behind a corporate proxy (#823). Live-mode localhost HTTP does not use
+//! this builder. The `socks-proxy` feature is enabled because ureq 2.x
+//! prefers `ALL_PROXY`, which is often `socks5://`. We opt in on this
+//! builder only, not globally via ureq's `proxy-from-env` feature.
 
 use std::sync::Arc;
+
+#[cfg(test)]
+pub(crate) static PROXY_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 use once_cell::sync::Lazy;
 use ureq::rustls::pki_types::CertificateDer;
 use ureq::rustls::{self, ClientConfig, RootCertStore};
 
-/// `ureq::AgentBuilder::new()` with the engine's trust store installed.
-/// Every HTTPS call site builds its agent from this; the plain-HTTP calls
-/// to the live server on localhost do not need it.
+/// `ureq::AgentBuilder::new()` with the engine's trust store installed and
+/// env proxy vars honored. Every HTTPS call site builds its agent from this;
+/// the plain-HTTP calls to the live server on localhost do not use it.
 pub fn agent_builder() -> ureq::AgentBuilder {
-    ureq::AgentBuilder::new().tls_config(tls_config())
+    ureq::AgentBuilder::new()
+        .tls_config(tls_config())
+        .try_proxy_from_env(true)
 }
 
 fn tls_config() -> Arc<ClientConfig> {
@@ -99,6 +111,104 @@ tB0WGTOG3QIgdJa8gBPU9Y6WsrursItsnUeGTYHKDCZZ6MjlekLFuoc=
     fn agent_builds_from_this_hosts_store() {
         // Runs the real rustls-native-certs load: it must not panic, and the
         // shared config must be accepted by a ureq agent.
+        let _lock = PROXY_ENV_LOCK.lock().unwrap();
         let _agent = agent_builder().build();
+    }
+
+    #[test]
+    fn agent_honors_http_proxy_from_env() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::MutexGuard;
+        use std::time::Duration;
+
+        struct ProxyEnvGuard {
+            saved: Vec<(String, Option<String>)>,
+        }
+
+        impl ProxyEnvGuard {
+            fn set(vars: &[(&str, Option<&str>)]) -> Self {
+                let saved = vars
+                    .iter()
+                    .map(|(key, _)| (key.to_string(), std::env::var(key).ok()))
+                    .collect();
+                for (key, value) in vars {
+                    match value {
+                        // SAFETY: PROXY_ENV_LOCK serializes every test that
+                        // reads or writes these process-global proxy vars.
+                        Some(v) => unsafe { std::env::set_var(key, v) },
+                        None => unsafe { std::env::remove_var(key) },
+                    }
+                }
+                Self { saved }
+            }
+        }
+
+        impl Drop for ProxyEnvGuard {
+            fn drop(&mut self) {
+                for (key, value) in &self.saved {
+                    match value {
+                        // SAFETY: same lock as set(); restore before unlock.
+                        Some(v) => unsafe { std::env::set_var(key, v) },
+                        None => unsafe { std::env::remove_var(key) },
+                    }
+                }
+            }
+        }
+
+        let _lock: MutexGuard<'_, ()> = PROXY_ENV_LOCK.lock().unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind proxy listener");
+        let proxy_addr = listener.local_addr().expect("proxy listener addr");
+
+        let request = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let request_for_thread = request.clone();
+        let handle = std::thread::spawn(move || {
+            listener
+                .set_nonblocking(true)
+                .expect("nonblocking proxy listener");
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while std::time::Instant::now() < deadline {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
+                };
+
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let chunk = &buf[..n];
+                if !chunk.is_empty() && String::from_utf8_lossy(chunk).contains("proxy-test.invalid") {
+                    request_for_thread.lock().unwrap().extend_from_slice(chunk);
+                    let response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
+                    let _ = stream.write_all(response);
+                    return;
+                }
+            }
+        });
+
+        let proxy_url = format!("http://127.0.0.1:{}", proxy_addr.port());
+        let _env_guard = ProxyEnvGuard::set(&[
+            ("ALL_PROXY", None),
+            ("all_proxy", None),
+            ("HTTPS_PROXY", None),
+            ("https_proxy", None),
+            ("HTTP_PROXY", Some(&proxy_url)),
+            ("http_proxy", Some(&proxy_url)),
+        ]);
+
+        let agent = agent_builder()
+            .timeout(Duration::from_secs(2))
+            .build();
+        let response = agent.get("http://proxy-test.invalid/").call();
+        assert!(response.is_ok(), "expected proxy-routed GET to succeed");
+
+        handle.join().expect("proxy thread");
+
+        let request_bytes = request.lock().unwrap().clone();
+        let request_text = String::from_utf8_lossy(&request_bytes);
+        assert!(
+            request_text.contains("proxy-test.invalid"),
+            "proxy should receive request for target host, got: {request_text:?}"
+        );
     }
 }
