@@ -140,12 +140,16 @@ fn locale_compare(a: &str, b: &str) -> std::cmp::Ordering {
 fn check(io: &mut Io) -> R<()> {
     let (sys, _) = ctx(io);
     let root = sys.find_project_root();
-    // Prefer the user-level tree when one exists so leftover project-layout
-    // dirs cannot make a current install look stale (#824). Stay on inferred
-    // scope otherwise so a home-rooted project install (`install -y`) is
-    // still visible.
-    let scope = if sys.is_home_dir(&root) && sys.is_already_installed(&root, Some(Scope::User)).is_some() {
-        Some(Scope::User)
+    // A home-rooted tree is either the user-level install or a project
+    // install under ~. Pick one scope so leftover dirs on the other layout
+    // cannot make a current copy look stale (#824). Inferred scope walks
+    // both, which is what produced the false "Updates available".
+    let scope = if sys.is_home_dir(&root) {
+        if sys.is_already_installed(&root, Some(Scope::User)).is_some() {
+            Some(Scope::User)
+        } else {
+            Some(Scope::Project)
+        }
     } else {
         None
     };

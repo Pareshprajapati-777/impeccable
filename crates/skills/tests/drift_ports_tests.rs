@@ -547,10 +547,15 @@ fn check_sees_home_rooted_project_scope_pi_install() {
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
     assert!(std::path::Path::new(&format!("{home}/.pi/skills/impeccable/SKILL.md")).exists());
     assert!(!std::path::Path::new(&format!("{home}/.pi/agent/skills/impeccable/SKILL.md")).exists());
+    write(
+        &format!("{home}/.pi/agent/skills/other/SKILL.md"),
+        "---\nname: other\n---\nLeftover user-layout skill.\n",
+    );
 
     let r = run_cli(&["check"], &home, &env);
     assert!(!r.stdout.contains("not installed"), "{}\n{}", r.stdout, r.stderr);
     assert!(r.stdout.contains("Skills are up to date"), "{}\n{}", r.stdout, r.stderr);
+    assert!(!r.stdout.contains("Updates available"), "{}", r.stdout);
     std::fs::remove_dir_all(&root).ok();
 }
 
