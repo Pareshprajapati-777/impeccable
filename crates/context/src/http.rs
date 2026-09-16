@@ -234,24 +234,53 @@ tB0WGTOG3QIgdJa8gBPU9Y6WsrursItsnUeGTYHKDCZZ6MjlekLFuoc=
         use std::time::Duration;
 
         fn socks5_then_http(stream: &mut std::net::TcpStream) -> Option<Vec<u8>> {
-            let mut buf = [0u8; 4096];
-            let n = stream.read(&mut buf).unwrap_or(0);
-            if n < 2 || buf[0] != 5 {
+            fn read_n(stream: &mut std::net::TcpStream, n: usize) -> Option<Vec<u8>> {
+                let mut buf = vec![0u8; n];
+                stream.read_exact(&mut buf).ok()?;
+                Some(buf)
+            }
+
+            let greet = read_n(stream, 2)?;
+            if greet[0] != 5 {
                 return None;
             }
+            let _ = read_n(stream, greet[1] as usize)?;
             stream.write_all(&[0x05, 0x00]).ok()?;
-            let n = stream.read(&mut buf).unwrap_or(0);
-            if n < 7 || buf[0] != 5 || buf[1] != 1 {
+
+            let req = read_n(stream, 4)?;
+            if req[0] != 5 || req[1] != 1 {
                 return None;
+            }
+            match req[3] {
+                1 => {
+                    let _ = read_n(stream, 6)?;
+                }
+                3 => {
+                    let len = read_n(stream, 1)?;
+                    let _ = read_n(stream, len[0] as usize + 2)?;
+                }
+                4 => {
+                    let _ = read_n(stream, 18)?;
+                }
+                _ => return None,
             }
             stream
                 .write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
                 .ok()?;
-            let n = stream.read(&mut buf).unwrap_or(0);
-            let chunk = buf[..n].to_vec();
-            if chunk.is_empty()
-                || !String::from_utf8_lossy(&chunk).contains("proxy-test.invalid")
-            {
+
+            let mut chunk = Vec::new();
+            let mut buf = [0u8; 4096];
+            loop {
+                let n = stream.read(&mut buf).ok()?;
+                if n == 0 {
+                    break;
+                }
+                chunk.extend_from_slice(&buf[..n]);
+                if String::from_utf8_lossy(&chunk).contains("proxy-test.invalid") {
+                    break;
+                }
+            }
+            if !String::from_utf8_lossy(&chunk).contains("proxy-test.invalid") {
                 return None;
             }
             let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
